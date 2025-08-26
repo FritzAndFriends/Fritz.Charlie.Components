@@ -18,4 +18,21 @@
     </PackageReference>
   </ItemGroup>
 	
+  <PropertyGroup>
+    <!-- NuGet package metadata (defaults; can be overridden by dotnet pack /p:... properties) -->
+    <PackageId>Fritz.Charlie.Components</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Jeffrey T. Fritz</Authors>
+    <Company>Fritz And Friends</Company>
+    <Description>A collection of intelligent Blazor components for maps and location-based UI.</Description>
+    <PackageTags>blazor;map;location;components</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/FritzAndFriends/Fritz.Charlie.Components</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/FritzAndFriends/Fritz.Charlie.Components</PackageProjectUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
 </Project>

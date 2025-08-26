@@ -1,0 +1,90 @@
+name: Build, pack and publish NuGet package
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional explicit package version (overrides tag).'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 9 SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore Fritz.Charlie.Components.sln
+
+      - name: Build
+        run: dotnet build Fritz.Charlie.Components.sln -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test ./Test.Components/Test.Components.csproj -c Release --no-build --verbosity normal
+
+      - name: Determine package version
+        id: get_version
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "Determining package version..."
+          if [ -n "$DISPATCH_VERSION" ]; then
+            VERSION="$DISPATCH_VERSION"
+          elif [ -n "$RELEASE_TAG" ]; then
+            VERSION="$RELEASE_TAG"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION=""
+            echo "No tag or version input found; pack/publish steps will be skipped."
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Pack NuGet package
+        if: ${{ steps.get_version.outputs.version != '' }}
+        run: dotnet pack Fritz.Charlie.Components/Fritz.Charlie.Components.csproj -c Release -o ./artifacts --no-build -p:PackageVersion=${{ steps.get_version.outputs.version }} -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
+
+      - name: Show packed files
+        if: ${{ steps.get_version.outputs.version != '' }}
+        run: ls -la ./artifacts || true
+
+      - name: Publish to GitHub Packages (NuGet)
+        if: ${{ steps.get_version.outputs.version != '' }}
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --api-key ${{ secrets.GITHUB_TOKEN }} \
+            --skip-duplicate
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+      - name: Publish to nuget.org (optional)
+        if: ${{ secrets.NUGET_API_KEY != '' && steps.get_version.outputs.version != '' }}
+        run: |
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --skip-duplicate
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
