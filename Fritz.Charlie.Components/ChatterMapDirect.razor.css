@@ -1,0 +1,278 @@
+/* ChatterMapDirect Component Isolated Styles */
+
+.chatter-map-container {
+    width: 100%;
+    position: relative;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.chatter-map {
+    width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border: 1px solid #e0e0e0;
+}
+
+/* Fix for Leaflet tile gaps - Minimal approach */
+::deep .leaflet-tile {
+    outline: none !important;
+    border: none !important;
+}
+
+/* Test Message Input */
+.test-message-container {
+    margin-bottom: 20px;
+    padding: 15px;
+    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+    border-radius: 8px;
+    border: 1px solid #b3d9ff;
+}
+
+.test-title {
+    margin: 0 0 10px 0;
+    color: #0066cc;
+    font-size: 1.1em;
+    font-weight: 600;
+}
+
+.test-input-group {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.test-message-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.test-message-input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.test-submit-btn {
+    padding: 8px 16px;
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.test-submit-btn:hover:not(:disabled) {
+    background-color: #5a6268;
+}
+
+.test-submit-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.test-result {
+    margin-top: 5px;
+}
+
+.test-result .text-muted {
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* Tour Controls */
+.tour-controls {
+    margin-top: 15px;
+    text-align: center;
+    padding: 10px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+}
+
+.tour-button {
+    font-weight: 600;
+    padding: 10px 20px;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+    border: none;
+    cursor: pointer;
+}
+
+.tour-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.tour-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.tour-status {
+    margin-left: 15px;
+    color: #007bff;
+    font-weight: 600;
+    font-size: 0.95em;
+}
+
+.tour-pending {
+    margin-left: 15px;
+    color: #ffc107;
+    font-weight: 600;
+    font-size: 0.9em;
+    background-color: rgba(255, 193, 7, 0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+/* Tour Info Panel */
+.tour-info {
+    margin-top: 20px;
+    padding: 20px;
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+    border: 2px solid #007bff;
+    border-radius: 12px;
+    text-align: left;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+    box-shadow: 0 4px 20px rgba(0, 123, 255, 0.1);
+}
+
+.tour-info-title {
+    margin: 0 0 15px 0;
+    color: #495057;
+    font-size: 1.2em;
+    font-weight: 700;
+    border-bottom: 2px solid #007bff;
+    padding-bottom: 8px;
+}
+
+.tour-info-detail {
+    margin: 8px 0;
+    font-size: 0.95em;
+    color: #6c757d;
+    line-height: 1.4;
+}
+
+.tour-info-detail strong {
+    color: #495057;
+    font-weight: 600;
+}
+
+/* Custom Royal Blue to Dark Purple Cluster Styles */
+::deep .marker-cluster-custom {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.2));
+}
+
+::deep .marker-cluster-custom:hover {
+    transform: scale(1.1);
+    filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.3));
+}
+
+::deep .marker-cluster-custom div {
+    margin: 0 !important;
+    border-radius: 50% !important;
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif !important;
+    line-height: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: all 0.3s ease !important;
+}
+
+::deep .marker-cluster-custom:hover div {
+    transform: scale(1.05);
+}
+
+/* Custom marker popup styles */
+::deep .leaflet-popup-content-wrapper {
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    border: 1px solid #e0e0e0;
+}
+
+::deep .leaflet-popup-content {
+    margin: 12px 16px;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+::deep .leaflet-popup-content strong {
+    color: #495057;
+    font-weight: 600;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .tour-controls {
+        margin-top: 10px;
+        padding: 8px;
+    }
+    
+    .tour-button {
+        padding: 8px 16px;
+        font-size: 0.9em;
+    }
+    
+    .tour-status,
+    .tour-pending {
+        display: block;
+        margin: 8px 0 0 0;
+        font-size: 0.85em;
+    }
+    
+    .tour-info {
+        margin-top: 15px;
+        padding: 15px;
+        max-width: none;
+        margin-left: 10px;
+        margin-right: 10px;
+    }
+    
+    .tour-info-title {
+        font-size: 1.1em;
+    }
+    
+    .tour-info-detail {
+        font-size: 0.9em;
+    }
+}
+
+/* Animation for tour transitions */
+@keyframes tour-pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.tour-info.active {
+    animation: tour-pulse 2s ease-in-out infinite;
+}
+
+/* Loading state */
+.chatter-map-container.loading .chatter-map::after {
+    content: "Loading map...";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255, 255, 255, 0.9);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    font-weight: 600;
+    color: #6c757d;
+    z-index: 1000;
+}

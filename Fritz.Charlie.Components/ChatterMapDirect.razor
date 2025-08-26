@@ -1,0 +1,79 @@
+<div class="chatter-map-container">
+    @if (TestMode)
+    {
+        <!-- Test Message Input -->
+        <div class="test-message-container">
+            <h5 class="test-title">🧪 Test Chat Message</h5>
+            <div class="test-input-group">
+                <input @bind="TestMessage" @onkeypress="HandleTestMessageKeyPress" 
+                       placeholder="Enter a test chat message (e.g., 'I'm from Seattle, WA')" 
+                       class="form-control test-message-input" />
+                <button @onclick="ProcessTestMessage" class="btn btn-secondary test-submit-btn" disabled="@string.IsNullOrWhiteSpace(TestMessage)">
+                    Process Message
+                </button>
+            </div>
+            @if (!string.IsNullOrEmpty(TestResult))
+            {
+                <div class="test-result">
+                    <small class="text-muted">Result: @TestResult</small>
+                </div>
+            }
+        </div>
+    }
+
+    <div id="@mapElementId" class="chatter-map"></div>
+    
+		@if (ShowTourControls) {
+    <div class="tour-controls">
+        @if (!IsTourActive)
+        {
+            <button @onclick="StartMapTour" class="btn btn-primary tour-button" disabled="@(TourLocations.Count == 0)">
+                Start Map Tour (@TourLocations.Count locations)
+            </button>
+        }
+        else
+        {
+            <button @onclick="StopMapTour" class="btn btn-danger tour-button">
+                Stop Tour
+            </button>
+            <span class="tour-status">🗺️ Tour in progress...</span>
+            @if (PendingLocationQueue.Count > 0)
+            {
+                <span class="tour-pending">📍 @PendingLocationQueue.Count location(s) queued</span>
+            }
+        }
+    </div>
+		}
+
+    @if (IsTourActive && CurrentTourStatus != null)
+    {
+        <div class="tour-info">
+            <h5 class="tour-info-title">🎯 Tour Progress</h5>
+            @try
+            {
+                var statusObj = (dynamic)CurrentTourStatus;
+                var currentIndex = (int)(statusObj?.currentIndex ?? 0);
+                var totalLocations = (int)(statusObj?.totalLocations ?? 0);
+                
+                <p class="tour-info-detail">
+                    <strong>Current Stop:</strong> @(currentIndex + 1) of @totalLocations
+                </p>
+            }
+            catch
+            {
+                <p class="tour-info-detail">
+                    <strong>Status:</strong> Tour in progress...
+                </p>
+            }
+            @if (CurrentTourLocation != null)
+            {
+                <p class="tour-info-detail">
+                    <strong>Location:</strong> @CurrentTourLocation.Value.LocationDescription
+                </p>
+                <p class="tour-info-detail">
+                    <strong>Coordinates:</strong> @CurrentTourLocation.Value.Latitude.ToString("F4"), @CurrentTourLocation.Value.Longitude.ToString("F4")
+                </p>
+            }
+        </div>
+    }
+</div>
