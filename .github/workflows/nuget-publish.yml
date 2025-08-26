@@ -59,6 +59,12 @@ jobs:
             VERSION=""
             echo "No tag or version input found; pack/publish steps will be skipped."
           fi
+          
+          # Strip leading 'v' if present for valid package version
+          if [[ "$VERSION" == v* ]]; then
+            VERSION="${VERSION#v}"
+          fi
+          
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Pack NuGet package
