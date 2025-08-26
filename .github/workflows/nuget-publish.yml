@@ -80,11 +80,16 @@ jobs:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
       - name: Publish to nuget.org (optional)
-        if: ${{ secrets.NUGET_API_KEY != '' && steps.get_version.outputs.version != '' }}
+        if: ${{ steps.get_version.outputs.version != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
         run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY secret not set; skipping nuget.org publish."
+            exit 0
+          fi
           dotnet nuget push "./artifacts/*.nupkg" \
             --source "https://api.nuget.org/v3/index.json" \
-            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --api-key "$NUGET_API_KEY" \
             --skip-duplicate
-        env:
-          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
