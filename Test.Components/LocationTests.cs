@@ -25,6 +25,18 @@ public class LocationTests
             { "hello from Virginia Beach, happy Tuesday!", "virginia beach" },
             { "Morning from Virginia.", "virginia" },
             { "Morning from Pittsburgh where we are currently the temperature of the sun", "pittsburgh" },
+            // Additional test case for complex sentence with "I'm" as stop word
+            { "Hello from Las Vegas I'm always one of the early people that lurk in here from the west coast", "las vegas" },
+            
+            // Test cases for "in" as stop word
+            { "greetings from Melbourne in a hospital somewhere", "melbourne" },
+            { "Hello from Chicago in the downtown area", "chicago" },
+            { "from Seattle in Washington state", "seattle" },
+            { "Good morning from Tokyo in Japan", "tokyo" },
+            { "I'm from Boston in Massachusetts", "boston" },
+            { "Hey from Denver in Colorado", "denver" },
+            { "Greetings from Paris in France", "paris" },
+            { "Hello from Sydney in Australia", "sydney" },
             
             // Venue-specific patterns (enhanced regex)
             { "hey there from a cafe in St. Louis", "st. louis" },
