@@ -1,4 +1,3 @@
-
 using Fritz.Charlie.Common;
 using Fritz.Charlie.Components.Map;
 using Fritz.Charlie.Components.Services;
@@ -7,55 +6,26 @@ namespace Fritz.Charlie.Components;
 
 public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 {
-    [Parameter]
-    public int Height { get; set; } = 640;
-
-    [Parameter]
-    public string Width { get; set; } = "100%";
-
-    [Parameter]
-    public bool TestMode { get; set; } = false;
-
-    [Parameter] 
-    public EventCallback OnMapInitialized { get; set; }
-    
-    [Parameter] 
-    public EventCallback<string> OnError { get; set; }
-
-    [Parameter]
-    public EventCallback<string> OnTestMessage { get; set; }
-
-    [Parameter]
-    public MapZoomLevel InitialZoom { get; set; } = MapZoomLevel.CountryView;
-
-    [Parameter]
-    public int MaxZoom { get; set; } = 6;
-
-    [Parameter]
-    public EventCallback<ViewerLocationEvent> OnLocationPlotted { get; set; }
-
-    [Parameter]
-    public EventCallback<Guid> OnLocationRemoved { get; set; }
-
-    [Parameter]
-    public IEnumerable<ViewerLocationEvent>? InitialLocations { get; set; }
-    
-    [Inject]
-    public IViewerLocationService ViewerLocationService { get; set; } = null!;
-    
-    [Inject]
-    public IJSRuntime JSRuntime { get; set; } = null!;
+    [Parameter] public int Height { get; set; } = 640;
+    [Parameter] public string Width { get; set; } = "100%";
+    [Parameter] public bool TestMode { get; set; } = false;
+    [Parameter] public EventCallback OnMapInitialized { get; set; }
+    [Parameter] public EventCallback<string> OnError { get; set; }
+    [Parameter] public EventCallback<string> OnTestMessage { get; set; }
+    [Parameter] public MapZoomLevel InitialZoom { get; set; } = MapZoomLevel.CountryView;
+    [Parameter] public int MaxZoom { get; set; } = 6;
+    [Parameter] public EventCallback<ViewerLocationEvent> OnLocationPlotted { get; set; }
+    [Parameter] public EventCallback<Guid> OnLocationRemoved { get; set; }
+    [Parameter] public IEnumerable<ViewerLocationEvent>? InitialLocations { get; set; }
+    [Inject] public IViewerLocationService ViewerLocationService { get; set; } = null!;
+    [Inject] public IJSRuntime JSRuntime { get; set; } = null!;
     private IJSObjectReference? mapModule;
     private bool mapInitialized = false;
     private string mapElementId = $"chatter-map-{Guid.NewGuid():N}";
-    
-    // Test message properties
     private string TestMessage { get; set; } = string.Empty;
     private string TestResult { get; set; } = string.Empty;
 
-	// Tour management
-	[Parameter]
-		public bool ShowTourControls { get; set; } = true;
+    [Parameter] public bool ShowTourControls { get; set; } = true;
     public bool IsTourActive { get; private set; } = false;
     public Dictionary<Guid, ViewerLocationEvent> TourLocations { get; } = new();
     private readonly Queue<ViewerLocationEvent> PendingLocationQueue = new();
@@ -64,35 +34,33 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     private DotNetObjectReference<ChatterMapDirect>? dotNetObjectRef;
     private List<ClusterGroup> tourClusters = new();
 
+    // NEW: Aggregation structures
+    private readonly Dictionary<(double lat, double lng), AggregateLocation> aggregatedMarkers = new();
+    private readonly Dictionary<Guid, (double lat, double lng)> locationKeyIndex = new();
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             try
             {
-                // Subscribe to location events from the service
                 ViewerLocationService.LocationPlotted += OnNewLocationFromService;
                 ViewerLocationService.LocationRemoved += OnLocationRemovedFromService;
 
-                // Import the isolated JavaScript module
-                mapModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import", 
+                mapModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
                     "./_content/Fritz.Charlie.Components/chattermap.js");
-                
-                // Initialize the map with the specific element ID, dimensions, and configurable max zoom
+
                 await mapModule.InvokeVoidAsync("initializeMap", mapElementId, Height, Width, 39.8283, -98.5795, (int)InitialZoom, MaxZoom);
                 mapInitialized = true;
 
-                // Create .NET object reference for JavaScript callbacks
                 dotNetObjectRef = DotNetObjectReference.Create(this);
                 await mapModule.InvokeVoidAsync("setDotNetReference", dotNetObjectRef);
 
-                // Load initial locations if provided
                 if (InitialLocations != null)
                 {
                     await LoadMarkersAsync(InitialLocations);
                 }
-              
-                // Notify parent that map is ready
+
                 await OnMapInitialized.InvokeAsync();
             }
             catch (Exception ex)
@@ -108,41 +76,72 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
         try
         {
-            // Check for duplicate locations by coordinates to prevent memory bloat
-            if (TourLocations.Values.Any(existingLocation => 
-                Math.Abs((double)(existingLocation.Latitude - location.Latitude)) < 0.0001 &&
-                Math.Abs((double)(existingLocation.Longitude - location.Longitude)) < 0.0001))
+            // During tour, queue instead of immediate plot
+            if (IsTourActive)
             {
-                Console.WriteLine($"WARNING: Duplicate location at {location.Latitude:F4}, {location.Longitude:F4} ({location.LocationDescription}), skipping");
+                PendingLocationQueue.Enqueue(location);
+                await InvokeAsync(StateHasChanged);
                 return;
             }
 
-            // Also check by ID for exact same instance
-            if (TourLocations.ContainsKey(location.Id))
+            // Check if this exact location ID is already plotted (prevent duplicates)
+            if (locationKeyIndex.ContainsKey(location.Id))
             {
-                Console.WriteLine($"WARNING: Duplicate location ID {location.Id}, skipping");
+                Console.WriteLine($"Skipping duplicate location {location.Id}");
                 return;
             }
 
-            // Limit total locations to prevent performance issues
-            if (TourLocations.Count >= 1000)
-            {
-                Console.WriteLine($"WARNING: Maximum location limit reached (1000), removing oldest location");
-                var oldestLocation = TourLocations.Values.First(); // Remove first added (FIFO)
-                await RemoveLocation(oldestLocation.Id);
-            }
+            // Aggregation key – 4 decimal places is ~11m resolution
+            var key = (lat: Math.Round((double)location.Latitude, 4), lng: Math.Round((double)location.Longitude, 4));
 
-            TourLocations.Add(location.Id, location);
-            await mapModule.InvokeVoidAsync("addMarker",
-                location.Id.ToString(),
-                Math.Round((double)location.Latitude, 6),
-                Math.Round((double)location.Longitude, 6),
-                location.UserType,
-                location.LocationDescription?.Length > 100 ? location.LocationDescription.Substring(0, 97) + "..." : location.LocationDescription,
-                location.Service == "YouTube" ? "YouTube" : "Twitch");
-                
-            // Notify parent component that a location was plotted
-            await OnLocationPlotted.InvokeAsync(location);
+            if (aggregatedMarkers.TryGetValue(key, out var aggregate))
+            {
+                // Add to existing aggregate
+                aggregate.Locations.Add(location);
+                locationKeyIndex[location.Id] = key;
+
+                // Update TourLocations with the new location
+                if (!TourLocations.ContainsKey(location.Id))
+                {
+                    TourLocations.Add(location.Id, location);
+                }
+
+                // Update marker (count + popup content)
+                var popupContent = BuildAggregatedPopupContent(aggregate);
+                await mapModule.InvokeVoidAsync("updateAggregatedMarker",
+                    aggregate.MarkerId,
+                    aggregate.Locations.Count,
+                    popupContent);
+
+                await OnLocationPlotted.InvokeAsync(location);
+            }
+            else
+            {
+                // Create new marker
+                var markerId = location.Id.ToString();
+                var description = Truncate(location.LocationDescription, 100);
+                await mapModule.InvokeVoidAsync("addMarker",
+                    markerId,
+                    Math.Round((double)location.Latitude, 6),
+                    Math.Round((double)location.Longitude, 6),
+                    location.UserType,
+                    description,
+                    location.Service == "YouTube" ? "YouTube" : "Twitch",
+                    1); // initial count
+
+                var newAggregate = new AggregateLocation(markerId, key.lat, key.lng);
+                newAggregate.Locations.Add(location);
+                aggregatedMarkers[key] = newAggregate;
+                locationKeyIndex[location.Id] = key;
+
+                // Add to TourLocations
+                if (!TourLocations.ContainsKey(location.Id))
+                {
+                    TourLocations.Add(location.Id, location);
+                }
+
+                await OnLocationPlotted.InvokeAsync(location);
+            }
         }
         catch (Exception ex)
         {
@@ -154,10 +153,42 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     {
         if (!mapInitialized || mapModule == null) return;
 
+        // Remove from TourLocations for tour purposes
         TourLocations.Remove(locationId);
-        await mapModule.InvokeVoidAsync("removeMarker", locationId.ToString());
-        
-        // Notify parent component that a location was removed
+
+        // Aggregation removal
+        if (locationKeyIndex.TryGetValue(locationId, out var key) &&
+            aggregatedMarkers.TryGetValue(key, out var aggregate))
+        {
+            var idx = aggregate.Locations.FindIndex(l => l.Id == locationId);
+            if (idx >= 0)
+            {
+                aggregate.Locations.RemoveAt(idx);
+            }
+            locationKeyIndex.Remove(locationId);
+
+            if (aggregate.Locations.Count == 0)
+            {
+                // Remove marker completely
+                await mapModule.InvokeVoidAsync("removeMarker", aggregate.MarkerId);
+                aggregatedMarkers.Remove(key);
+            }
+            else
+            {
+                // Update existing aggregated marker with new count
+                var popupContent = BuildAggregatedPopupContent(aggregate);
+                await mapModule.InvokeVoidAsync("updateAggregatedMarker",
+                    aggregate.MarkerId,
+                    aggregate.Locations.Count,
+                    popupContent);
+            }
+        }
+        else
+        {
+            // Fallback if not found in aggregation (legacy or mismatch)
+            await mapModule.InvokeVoidAsync("removeMarker", locationId.ToString());
+        }
+
         await OnLocationRemoved.InvokeAsync(locationId);
     }
 
@@ -167,88 +198,48 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
         try
         {
-            // Limit tour to reasonable number of locations to prevent JSInterop issues
             var locationsList = TourLocations.Values.ToList();
             if (locationsList.Count > 200)
             {
-                Console.WriteLine($"WARNING: Large number of locations ({locationsList.Count}), limiting to 200 for tour performance");
                 locationsList = locationsList.Take(200).ToList();
             }
 
-            // Create tour stops using clustering logic from actual map data
             tourClusters = GenerateClusters(locationsList, forTour: true);
             var arrangedClusters = ArrangeClustersByDistance(tourClusters);
-            
-            // Limit tour stops to prevent excessive tour duration and JSInterop payload size
+
             if (arrangedClusters.Count > 15)
             {
-                Console.WriteLine($"WARNING: Large number of tour stops ({arrangedClusters.Count}), limiting to 15 for performance");
                 arrangedClusters = arrangedClusters.Take(15).ToList();
             }
-            
-            // Convert clusters to tour stops for JavaScript - limit location details to prevent large payloads
-            var tourStops = arrangedClusters.Select(cluster => new 
-            { 
+
+            var tourStops = arrangedClusters.Select(cluster => new
+            {
                 lat = Math.Round(cluster.CenterLatitude, 6),
                 lng = Math.Round(cluster.CenterLongitude, 6),
                 zoom = DetermineZoomLevel(cluster),
                 description = GetLocationDescription(cluster),
                 locationCount = cluster.Locations.Count,
-                // Only include first few locations to limit payload size
                 locations = cluster.Locations.Take(10).Select(loc => new
                 {
-                    description = loc.LocationDescription?.Length > 50 ? loc.LocationDescription.Substring(0, 47) + "..." : loc.LocationDescription,
+                    description = Truncate(loc.LocationDescription, 50),
                     lat = Math.Round((double)loc.Latitude, 6),
                     lng = Math.Round((double)loc.Longitude, 6),
                     userType = loc.UserType,
                     service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
                 }).ToArray()
             }).ToArray();
-            
-            Console.WriteLine($"DEBUG: About to start tour with {tourStops.Length} stops from {TourLocations.Count} locations");
-            foreach (var stop in tourStops)
-            {
-                Console.WriteLine($"  Stop: {stop.description} at {stop.lat:F4}, {stop.lng:F4} (zoom {stop.zoom}) - {stop.locationCount} locations");
-            }
-            
-            // Call JavaScript with clustered tour stops BEFORE setting IsTourActive
+
             await mapModule.InvokeVoidAsync("startTour", (object)tourStops);
-            
-            // Set tour active after JavaScript call succeeds
             IsTourActive = true;
             StateHasChanged();
         }
         catch (Exception ex)
         {
             Console.WriteLine($"ERROR starting tour: {ex.Message}");
-            // Reset tour state on error
             IsTourActive = false;
             CurrentTourLocation = null;
             StateHasChanged();
         }
-    }
-
-    private int DetermineZoomLevel(ClusterGroup cluster)
-    {
-        // Determine appropriate zoom level based on cluster size and spread, respecting MaxZoom
-        int targetZoom;
-        if (cluster.Count == 1) targetZoom = 8; // Individual location - zoom in close
-        else if (cluster.AverageDistanceFromCenter < 50) targetZoom = 6; // Tight cluster - medium zoom
-        else if (cluster.AverageDistanceFromCenter < 200) targetZoom = 5; // Moderate spread - wider view
-        else targetZoom = 4; // Large spread - wide view
-        
-        return Math.Min(targetZoom, MaxZoom); // Respect the configured max zoom
-    }
-
-    private string GetLocationDescription(ClusterGroup cluster)
-    {
-        if (cluster.Count == 1)
-        {
-            return cluster.Locations.First().LocationDescription;
-        }
-
-        var continent = GetContinentName(cluster.CenterLatitude, cluster.CenterLongitude);
-        return $"{continent} Region ({cluster.Count} locations)";
     }
 
     private async Task StopMapTour()
@@ -258,8 +249,6 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         IsTourActive = false;
         CurrentTourLocation = null;
         await mapModule.InvokeVoidAsync("stopTour");
-        
-        // Process pending locations
         await ProcessPendingLocations();
         StateHasChanged();
     }
@@ -272,17 +261,11 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Called by JavaScript when the tour status changes
-    /// </summary>
     [JSInvokable]
     public async Task OnTourStatusChanged(bool isActive, int currentIndex, int totalLocations)
     {
         try
         {
-            Console.WriteLine($"Tour status callback: active={isActive}, index={currentIndex}, total={totalLocations}");
-            
-            // Update current tour location if tour is active
             if (isActive && currentIndex > 0 && currentIndex <= tourClusters.Count)
             {
                 var currentCluster = tourClusters[currentIndex - 1];
@@ -298,24 +281,18 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             {
                 CurrentTourLocation = null;
             }
-            
-            // Check if tour status has changed
+
             if (IsTourActive != isActive)
             {
-                Console.WriteLine($"Tour status changed: {IsTourActive} -> {isActive}");
                 IsTourActive = isActive;
-                
                 if (!IsTourActive)
                 {
-                    Console.WriteLine("Tour ended - processing pending locations");
                     await ProcessPendingLocations();
                 }
-                
                 await InvokeAsync(StateHasChanged);
             }
             else if (IsTourActive)
             {
-                // Update UI if tour is active to show progress
                 await InvokeAsync(StateHasChanged);
             }
         }
@@ -334,8 +311,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         return true;
     }
 
-    #region Clustering Logic (Extracted from original implementation)
-    
+    // --- Existing clustering logic unchanged below ---
     private List<ClusterGroup> GenerateClusters(List<ViewerLocationEvent> locations, bool forTour = false)
     {
         var validLocations = locations.Where(IsValidLocation).ToList();
@@ -343,14 +319,14 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
         var clusters = new List<ClusterGroup>();
         var processed = new HashSet<Guid>();
-        
-        double clusterDistanceKm = forTour ? 2000.0 : // 1250 miles for tour - increased for better visual grouping
+
+        double clusterDistanceKm = forTour ? 2000.0 :
             validLocations.Count switch
             {
-                <= 10 => 500.0,  // Increased from 150km
-                <= 25 => 800.0,  // Increased from 200km  
-                <= 50 => 1200.0, // Increased from 300km
-                _ => 1500.0      // Increased from 500km
+                <= 10 => 500.0,
+                <= 25 => 800.0,
+                <= 50 => 1200.0,
+                _ => 1500.0
             };
 
         foreach (var location in validLocations)
@@ -365,7 +341,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             {
                 if (processed.Contains(otherLocation.Id)) continue;
 
-                if (IsWithinDistance(location, otherLocation, clusterDistanceKm) && 
+                if (IsWithinDistance(location, otherLocation, clusterDistanceKm) &&
                     IsSameContinent(location, otherLocation))
                 {
                     cluster.Locations.Add(otherLocation);
@@ -386,26 +362,23 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
         var arranged = new List<ClusterGroup>();
         var remaining = new List<ClusterGroup>(clusters);
-
-        // Start with the cluster closest to the center of the US
         var centerLat = 39.8283;
         var centerLng = -98.5795;
-        
-        var current = remaining.OrderBy(c => 
+
+        var current = remaining.OrderBy(c =>
             Math.Sqrt(Math.Pow(c.CenterLatitude - centerLat, 2) + Math.Pow(c.CenterLongitude - centerLng, 2)))
             .First();
-        
+
         arranged.Add(current);
         remaining.Remove(current);
 
-        // Greedily select the farthest cluster from the current one
         while (remaining.Count > 0)
         {
             var farthest = remaining.OrderByDescending(c =>
-                Math.Sqrt(Math.Pow(c.CenterLatitude - current.CenterLatitude, 2) + 
-                         Math.Pow(c.CenterLongitude - current.CenterLongitude, 2)))
+                Math.Sqrt(Math.Pow(c.CenterLatitude - current.CenterLatitude, 2) +
+                          Math.Pow(c.CenterLongitude - current.CenterLongitude, 2)))
                 .First();
-            
+
             arranged.Add(farthest);
             remaining.Remove(farthest);
             current = farthest;
@@ -414,11 +387,9 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         return arranged;
     }
 
-    private bool IsWithinDistance(ViewerLocationEvent loc1, ViewerLocationEvent loc2, double maxDistanceKm)
-    {
-        return CalculateDistanceKm((double)loc1.Latitude, (double)loc1.Longitude,
-                                  (double)loc2.Latitude, (double)loc2.Longitude) <= maxDistanceKm;
-    }
+    private bool IsWithinDistance(ViewerLocationEvent loc1, ViewerLocationEvent loc2, double maxDistanceKm) =>
+        CalculateDistanceKm((double)loc1.Latitude, (double)loc1.Longitude,
+            (double)loc2.Latitude, (double)loc2.Longitude) <= maxDistanceKm;
 
     private bool IsSameContinent(ViewerLocationEvent loc1, ViewerLocationEvent loc2)
     {
@@ -429,63 +400,20 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
     private string GetContinentCode(double latitude, double longitude)
     {
-        // Return continent codes to prevent cross-ocean clustering
-        
-        // South America (check first to avoid overlap with North America)
-        if (latitude >= -60 && latitude < 15 && longitude >= -85 && longitude <= -30)
-        {
-            return "SAM";
-        }
-        
-        // North America (including Central America and Caribbean)
-        if (latitude >= 5 && longitude >= -180 && longitude <= -30)
-        {
-            return "NAM";
-        }
-        
-        // Europe (including European Russia west of Urals)
-        if (latitude >= 35 && longitude >= -10 && longitude <= 60)
-        {
-            return "EUR";
-        }
-        
-        // Africa
-        if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55)
-        {
-            return "AFR";
-        }
-        
-        // Asia (including Asian Russia east of Urals)
-        if (latitude >= 0 && longitude >= 60 && longitude <= 180)
-        {
-            return "ASI";
-        }
-        
-        // Southeast Asia and Indonesia (special case to separate from mainland Asia)
-        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150)
-        {
-            return "SEA";
-        }
-        
-        // Australia and Oceania
-        if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180)
-        {
-            return "OCE";
-        }
-        
-        // Antarctica
-        if (latitude < -60)
-        {
-            return "ANT";
-        }
-        
-        // Default to ocean/unknown - these won't cluster with anything
+        if (latitude >= -60 && latitude < 15 && longitude >= -85 && longitude <= -30) return "SAM";
+        if (latitude >= 5 && longitude >= -180 && longitude <= -30) return "NAM";
+        if (latitude >= 35 && longitude >= -10 && longitude <= 60) return "EUR";
+        if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55) return "AFR";
+        if (latitude >= 0 && longitude >= 60 && longitude <= 180) return "ASI";
+        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150) return "SEA";
+        if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180) return "OCE";
+        if (latitude < -60) return "ANT";
         return "OCN";
     }
 
     private double CalculateDistanceKm(double lat1, double lng1, double lat2, double lng2)
     {
-        const double R = 6371; // Earth's radius in km
+        const double R = 6371;
         var dLat = (lat2 - lat1) * Math.PI / 180;
         var dLng = (lng2 - lng1) * Math.PI / 180;
         var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
@@ -497,81 +425,52 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
     private string GetContinentName(double latitude, double longitude)
     {
-        // Enhanced continent detection with directional specificity
-        // Using same boundaries as GetContinentCode to ensure consistency
-        
-        // South America with directional subdivisions (check first to avoid overlap with North America)
         if (latitude >= -60 && latitude < 15 && longitude >= -85 && longitude <= -30)
         {
-            if (longitude <= -70) return "Western South America"; // Chile, Peru, Western areas
-            if (latitude < -20) return "Southern South America";  // Argentina, Southern areas
-            return "Eastern South America"; // Brazil, Eastern areas
+            if (longitude <= -70) return "Western South America";
+            if (latitude < -20) return "Southern South America";
+            return "Eastern South America";
         }
-        
-        // North America with directional subdivisions (including Central America and Caribbean)
         if (latitude >= 5 && longitude >= -180 && longitude <= -30)
         {
-            if (longitude <= -130) return "Western North America"; // Alaska, Western Canada, US West Coast
-            if (longitude <= -95) return "Central North America";  // Central US/Canada
-            if (longitude <= -60) return "Eastern North America";  // US East Coast, Eastern Canada
-            return "Northern North America"; // Greenland, Arctic
+            if (longitude <= -130) return "Western North America";
+            if (longitude <= -95) return "Central North America";
+            if (longitude <= -60) return "Eastern North America";
+            return "Northern North America";
         }
-        
-        // Europe with directional subdivisions (including European Russia west of Urals)
         if (latitude >= 35 && longitude >= -10 && longitude <= 60)
         {
-            if (longitude <= 15) return "Western Europe";    // UK, France, Spain, etc.
-            if (longitude <= 30) return "Central Europe";    // Germany, Poland, etc.
-            if (latitude >= 55) return "Northern Europe";    // Scandinavia, Baltics
-            if (latitude <= 45) return "Southern Europe";    // Italy, Greece, Balkans
-            return "Eastern Europe"; // Russia, Eastern countries
+            if (longitude <= 15) return "Western Europe";
+            if (longitude <= 30) return "Central Europe";
+            if (latitude >= 55) return "Northern Europe";
+            if (latitude <= 45) return "Southern Europe";
+            return "Eastern Europe";
         }
-        
-        // Africa with directional subdivisions
         if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55)
         {
-            if (latitude >= 15) return "Northern Africa";    // Egypt, Libya, Morocco, etc.
-            if (longitude <= 15) return "Western Africa";    // Nigeria, Ghana, etc.
-            if (longitude >= 35) return "Eastern Africa";    // Kenya, Ethiopia, etc.
-            return "Central Africa"; // Congo, Central African Republic, etc.
+            if (latitude >= 15) return "Northern Africa";
+            if (longitude <= 15) return "Western Africa";
+            if (longitude >= 35) return "Eastern Africa";
+            return "Central Africa";
         }
-        
-        // Asia with directional subdivisions (including Asian Russia east of Urals)
         if (latitude >= 0 && longitude >= 60 && longitude <= 180)
         {
-            if (longitude <= 100) return "South Asia";       // India, Pakistan, etc.
-            if (latitude >= 50) return "Northern Asia";      // Siberia, Mongolia
-            if (longitude >= 140) return "East Asia";        // Japan, Korea, Eastern China
-            if (latitude <= 30) return "Southeast Asia";     // Thailand, Indonesia, etc.
-            return "Central Asia"; // China, Kazakhstan, etc.
+            if (longitude <= 100) return "South Asia";
+            if (latitude >= 50) return "Northern Asia";
+            if (longitude >= 140) return "East Asia";
+            if (latitude <= 30) return "Southeast Asia";
+            return "Central Asia";
         }
-        
-        // Southeast Asia and Indonesia (special case)
-        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150)
-        {
-            return "Southeast Asia";
-        }
-        
-        // Australia/Oceania with subdivisions
+        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150) return "Southeast Asia";
         if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180)
         {
-            if (longitude >= 160) return "Pacific Islands";  // Fiji, New Zealand area
-            if (latitude >= -25) return "Northern Australia"; // Northern territories
-            return "Southern Australia"; // Most of populated Australia
+            if (longitude >= 160) return "Pacific Islands";
+            if (latitude >= -25) return "Northern Australia";
+            return "Southern Australia";
         }
-        
-        // Antarctica
-        if (latitude < -60)
-        {
-            return "Antarctica";
-        }
-        
+        if (latitude < -60) return "Antarctica";
         return "Ocean Region";
     }
-
-    #endregion
-
-    #region Support Classes
 
     public class ClusterGroup
     {
@@ -586,10 +485,10 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         public void CalculateCenter()
         {
             if (Locations.Count == 0) return;
-            
+
             CenterLatitude = Locations.Average(l => (double)l.Latitude);
             CenterLongitude = Locations.Average(l => (double)l.Longitude);
-            
+
             if (Locations.Count > 1)
             {
                 AverageDistanceFromCenter = Locations.Average(l =>
@@ -600,47 +499,71 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
                             Math.Cos(CenterLatitude * Math.PI / 180) * Math.Cos((double)l.Latitude * Math.PI / 180) *
                             Math.Sin(dLng / 2) * Math.Sin(dLng / 2);
                     var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
-                    return 6371 * c; // Earth's radius in km
+                    return 6371 * c;
                 });
             }
         }
     }
 
-    public class TourStop
+    // NEW: AggregateLocation helper
+    private class AggregateLocation
     {
-        public double Lat { get; set; }
-        public double Lng { get; set; }
-        public int Zoom { get; set; }
-        public string Description { get; set; } = string.Empty;
-        public TourLocation[] Locations { get; set; } = Array.Empty<TourLocation>();
+        public string MarkerId { get; }
+        public double Lat { get; }
+        public double Lng { get; }
+        public List<ViewerLocationEvent> Locations { get; }
+
+        public AggregateLocation(string markerId, double lat, double lng)
+        {
+            MarkerId = markerId;
+            Lat = lat;
+            Lng = lng;
+            Locations = new List<ViewerLocationEvent>();
+        }
     }
 
-    public class TourLocation
+    private int DetermineZoomLevel(ClusterGroup cluster)
     {
-        public string Description { get; set; } = string.Empty;
-        public double Lat { get; set; }
-        public double Lng { get; set; }
-        public string UserType { get; set; } = string.Empty;
-        public string Service { get; set; } = string.Empty;
+        // Determine appropriate zoom level based on cluster characteristics
+        if (cluster.Count == 1)
+        {
+            return Math.Min(6, MaxZoom); // City level for single locations
+        }
+        else if (cluster.AverageDistanceFromCenter < 50)
+        {
+            return Math.Min(7, MaxZoom); // Close cluster - zoom in more
+        }
+        else if (cluster.AverageDistanceFromCenter < 200)
+        {
+            return Math.Min(5, MaxZoom); // Medium spread - state level
+        }
+        else if (cluster.AverageDistanceFromCenter < 500)
+        {
+            return Math.Min(4, MaxZoom); // Large spread - regional level
+        }
+        else
+        {
+            return Math.Min(3, MaxZoom); // Very large spread - country level
+        }
     }
 
-    #endregion
+    private string GetLocationDescription(ClusterGroup cluster)
+    {
+        if (cluster.Count == 1)
+        {
+            return Truncate(cluster.Locations[0].LocationDescription, 100);
+        }
 
-    #region Public API
+        var regionName = GetContinentName(cluster.CenterLatitude, cluster.CenterLongitude);
+        return $"{regionName} ({cluster.Count} viewers)";
+    }
 
-    /// <summary>
-    /// Adds a marker to the map
-    /// </summary>
-    /// <param name="location">The location to add to the map</param>
     public async Task AddMarkerAsync(ViewerLocationEvent location)
     {
         await PlotLocation(location);
         await InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>
-    /// Clears all markers from the map
-    /// </summary>
     public async Task ClearAllMarkersAsync()
     {
         if (!mapInitialized || mapModule == null) return;
@@ -650,7 +573,8 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             await mapModule.InvokeVoidAsync("clearMarkers");
             TourLocations.Clear();
             PendingLocationQueue.Clear();
-            
+            aggregatedMarkers.Clear();
+            locationKeyIndex.Clear();
             Console.WriteLine("Cleared all markers");
             StateHasChanged();
         }
@@ -660,27 +584,10 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Gets the current marker count
-    /// </summary>
-    public int GetMarkerCount()
-    {
-        return TourLocations.Count;
-    }
+    public int GetMarkerCount() => aggregatedMarkers.Sum(a => a.Value.Locations.Count);
 
-    /// <summary>
-    /// Removes a marker from the map
-    /// </summary>
-    /// <param name="locationId">The ID of the location to remove</param>
-    public async Task RemoveMarkerAsync(Guid locationId)
-    {
-        await RemoveLocation(locationId);
-    }
+    public async Task RemoveMarkerAsync(Guid locationId) => await RemoveLocation(locationId);
 
-    /// <summary>
-    /// Loads multiple markers onto the map
-    /// </summary>
-    /// <param name="locations">The locations to add to the map</param>
     public async Task LoadMarkersAsync(IEnumerable<ViewerLocationEvent> locations)
     {
         if (!mapInitialized || mapModule == null) return;
@@ -688,40 +595,15 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         try
         {
             var validLocations = locations.Where(IsValidLocation).ToList();
-            
-            // Limit initial load to prevent performance issues
+
             if (validLocations.Count > 500)
             {
-                Console.WriteLine($"WARNING: Large number of locations ({validLocations.Count}), limiting initial load to 500");
                 validLocations = validLocations.Take(500).ToList();
             }
 
             foreach (var location in validLocations)
             {
-                // Check for duplicate locations by coordinates to prevent memory bloat
-                if (TourLocations.Values.Any(existingLocation => 
-                    Math.Abs((double)(existingLocation.Latitude - location.Latitude)) < 0.0001 &&
-                    Math.Abs((double)(existingLocation.Longitude - location.Longitude)) < 0.0001))
-                {
-                    Console.WriteLine($"WARNING: Duplicate location at {location.Latitude:F4}, {location.Longitude:F4} ({location.LocationDescription}), skipping during batch load");
-                    continue;
-                }
-
-                // Also check by ID for exact same instance
-                if (TourLocations.ContainsKey(location.Id))
-                {
-                    Console.WriteLine($"WARNING: Duplicate location ID {location.Id}, skipping during batch load");
-                    continue;
-                }
-
-                TourLocations.Add(location.Id, location);
-                await mapModule.InvokeVoidAsync("addMarker", 
-                    location.Id.ToString(), 
-                    Math.Round((double)location.Latitude, 6), 
-                    Math.Round((double)location.Longitude, 6),
-                    location.UserType, 
-                    location.LocationDescription?.Length > 100 ? location.LocationDescription.Substring(0, 97) + "..." : location.LocationDescription,
-                    location.Service == "YouTube" ? "YouTube" : "Twitch");
+                await PlotLocation(location);
             }
             StateHasChanged();
         }
@@ -731,20 +613,12 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Zooms the map to a specific location with smooth animation
-    /// </summary>
-    /// <param name="latitude">The latitude to zoom to</param>
-    /// <param name="longitude">The longitude to zoom to</param>
-    /// <param name="zoomLevel">The zoom level (default is StateView)</param>
     public async Task ZoomToLocationAsync(double latitude, double longitude, MapZoomLevel zoomLevel = MapZoomLevel.StateView)
     {
         if (!mapInitialized || mapModule == null) return;
-
         try
         {
             await mapModule.InvokeVoidAsync("zoomToLocation", latitude, longitude, (int)zoomLevel);
-            Console.WriteLine($"Zoomed to location: {latitude:F4}, {longitude:F4} at zoom level {zoomLevel} ({(int)zoomLevel})");
         }
         catch (Exception ex)
         {
@@ -752,18 +626,12 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Sets the map zoom level
-    /// </summary>
-    /// <param name="zoomLevel">The zoom level to set</param>
     public async Task SetZoomLevelAsync(MapZoomLevel zoomLevel)
     {
         if (!mapInitialized || mapModule == null) return;
-
         try
         {
             await mapModule.InvokeVoidAsync("setZoom", (int)zoomLevel);
-            Console.WriteLine($"Set map zoom level to {zoomLevel} ({(int)zoomLevel})");
         }
         catch (Exception ex)
         {
@@ -771,52 +639,34 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Gets the current maximum zoom level
-    /// </summary>
     public async Task<int> GetMaxZoomAsync()
     {
         if (!mapInitialized || mapModule == null) return MaxZoom;
-
         try
         {
             return await mapModule.InvokeAsync<int>("getMaxZoom");
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Error getting max zoom level: {ex.Message}");
             return MaxZoom;
         }
     }
 
-    /// <summary>
-    /// Sets the maximum zoom level after initialization
-    /// </summary>
-    /// <param name="maxZoom">The maximum zoom level to set</param>
     public async Task<bool> SetMaxZoomAsync(int maxZoom)
     {
         if (!mapInitialized || mapModule == null) return false;
-
         try
         {
             var result = await mapModule.InvokeAsync<bool>("setMaxZoom", maxZoom);
-            if (result)
-            {
-                MaxZoom = maxZoom; // Update the parameter value
-                Console.WriteLine($"Updated max zoom level to: {maxZoom}");
-            }
+            if (result) MaxZoom = maxZoom;
             return result;
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Error setting max zoom level: {ex.Message}");
             return false;
         }
     }
 
-    #endregion
-
-    // Test message handling methods - these will be exposed as parameters/callbacks for parent component to handle
     private async Task ProcessTestMessage()
     {
         if (string.IsNullOrWhiteSpace(TestMessage))
@@ -830,12 +680,9 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         {
             TestResult = $"Processing location for: '{TestMessage}'...";
             StateHasChanged();
-
-            // Send the test message to parent component for geocoding and processing
             await OnTestMessage.InvokeAsync(TestMessage);
-            
-            var messageForDisplay = TestMessage; // Save the message before clearing
-            TestMessage = string.Empty; // Clear the input
+            var messageForDisplay = TestMessage;
+            TestMessage = string.Empty;
             TestResult = $"Message sent for geocoding '{messageForDisplay}'";
         }
         catch (Exception ex)
@@ -854,28 +701,18 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
     private async Task HandleTestMessageKeyPress(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
-        {
-            await ProcessTestMessage();
-        }
+        if (e.Key == "Enter") await ProcessTestMessage();
     }
-
-    #region Service Event Handlers
 
     private async void OnNewLocationFromService(object? sender, ViewerLocationEvent viewerEvent)
     {
-        // Use the ViewerLocationEvent directly, create new ID for display
         var location = viewerEvent.ForDisplay();
-
         if (IsTourActive)
         {
-            // During tour, queue the location instead of adding immediately
             PendingLocationQueue.Enqueue(location);
-            Console.WriteLine($"Tour active: Queued location {location.LocationDescription} ({PendingLocationQueue.Count} pending)");
-            await InvokeAsync(StateHasChanged); // Update UI to show queued count
+            await InvokeAsync(StateHasChanged);
             return;
         }
-
         await PlotLocation(location);
         await InvokeAsync(StateHasChanged);
     }
@@ -884,23 +721,17 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     {
         if (IsTourActive)
         {
-            // During tour, just remove from our collections but don't refresh map
             TourLocations.Remove(locationId);
-            // Also remove from queue if it's there (though unlikely)
             var tempQueue = new Queue<ViewerLocationEvent>();
             while (PendingLocationQueue.TryDequeue(out var queuedLocation))
             {
                 if (queuedLocation.Id != locationId)
-                {
                     tempQueue.Enqueue(queuedLocation);
-                }
             }
-            // Put back the non-removed items
-            while (tempQueue.TryDequeue(out var queuedLocation))
+            while (tempQueue.TryDequeue(out var q))
             {
-                PendingLocationQueue.Enqueue(queuedLocation);
+                PendingLocationQueue.Enqueue(q);
             }
-            Console.WriteLine($"Tour active: Removed location {locationId} from collections");
             await InvokeAsync(StateHasChanged);
             return;
         }
@@ -909,48 +740,52 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         await InvokeAsync(StateHasChanged);
     }
 
-    #endregion
+    private string BuildAggregatedPopupContent(AggregateLocation aggregate)
+    {
+        var count = aggregate.Locations.Count;
+        // Show up to 5 distinct (service + userType) samples
+        var serviceSummary = aggregate.Locations
+            .GroupBy(l => l.Service)
+            .Select(g => $"{g.Key}:{g.Count()}")
+            .Take(3);
+
+        var userTypeSummary = aggregate.Locations
+            .GroupBy(l => l.UserType)
+            .OrderByDescending(g => g.Count())
+            .Select(g => $"{g.Key}:{g.Count()}")
+            .Take(5);
+
+        var firstDescription = aggregate.Locations.First().LocationDescription;
+        return $"{Truncate(firstDescription, 60)}<br/>Viewers: {count}<br/>Services: {string.Join(", ", serviceSummary)}<br/>Roles: {string.Join(", ", userTypeSummary)}";
+    }
+
+    private string Truncate(string? text, int max)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        return text.Length <= max ? text : text.Substring(0, max - 3) + "...";
+    }
 
     public async ValueTask DisposeAsync()
     {
         try
         {
-            // Unsubscribe from service events
             ViewerLocationService.LocationPlotted -= OnNewLocationFromService;
             ViewerLocationService.LocationRemoved -= OnLocationRemovedFromService;
 
-            // Dispose the .NET object reference
             dotNetObjectRef?.Dispose();
             dotNetObjectRef = null;
-            
-            // Since we no longer subscribe to Feature events directly, no need to unsubscribe
-            
-            // Dispose JavaScript module
+
             if (mapModule != null)
             {
-                try
-                {
-                    await mapModule.InvokeVoidAsync("dispose");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"WARNING: Error disposing map module: {ex.Message}");
-                }
-                
-                try
-                {
-                    await mapModule.DisposeAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"WARNING: Error disposing JSObjectReference: {ex.Message}");
-                }
+                try { await mapModule.InvokeVoidAsync("dispose"); } catch { }
+                try { await mapModule.DisposeAsync(); } catch { }
             }
-            
-            // Clear collections to help GC
+
             TourLocations.Clear();
             PendingLocationQueue.Clear();
             tourClusters.Clear();
+            aggregatedMarkers.Clear();
+            locationKeyIndex.Clear();
         }
         catch (Exception ex)
         {
@@ -959,58 +794,16 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     }
 }
 
-/// <summary>
-/// Defines the zoom levels available for the map with descriptive labels
-/// </summary>
 public enum MapZoomLevel
 {
-    /// <summary>
-    /// World view - shows entire continents (zoom level 1)
-    /// </summary>
     WorldView = 1,
-    
-    /// <summary>
-    /// Continental view - shows large regions like North America (zoom level 2)
-    /// </summary>
     ContinentalView = 2,
-    
-    /// <summary>
-    /// Country view - shows entire countries (zoom level 3)
-    /// </summary>
     CountryView = 3,
-    
-    /// <summary>
-    /// Regional view - shows states/provinces (zoom level 4)
-    /// </summary>
     RegionalView = 4,
-    
-    /// <summary>
-    /// State view - shows individual states or large metropolitan areas (zoom level 5)
-    /// </summary>
     StateView = 5,
-    
-    /// <summary>
-    /// City view - shows cities and surrounding areas (zoom level 6)
-    /// </summary>
     CityView = 6,
-    
-    /// <summary>
-    /// Urban view - shows urban areas and neighborhoods (zoom level 7)
-    /// </summary>
     UrbanView = 7,
-    
-    /// <summary>
-    /// Street view - shows detailed street-level view (zoom level 8)
-    /// </summary>
     StreetView = 8,
-    
-    /// <summary>
-    /// Building view - shows individual buildings (zoom level 9)
-    /// </summary>
     BuildingView = 9,
-    
-    /// <summary>
-    /// Detail view - maximum zoom for detailed viewing (zoom level 10)
-    /// </summary>
     DetailView = 10
 }
