@@ -29,6 +29,9 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     public MapZoomLevel InitialZoom { get; set; } = MapZoomLevel.CountryView;
 
     [Parameter]
+    public int MaxZoom { get; set; } = 6;
+
+    [Parameter]
     public EventCallback<ViewerLocationEvent> OnLocationPlotted { get; set; }
 
     [Parameter]
@@ -75,8 +78,8 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
                 mapModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import", 
                     "./_content/Fritz.Charlie.Components/chattermap.js");
                 
-                // Initialize the map with the specific element ID and dimensions
-                await mapModule.InvokeVoidAsync("initializeMap", mapElementId, Height, Width, 39.8283, -98.5795, (int)InitialZoom);
+                // Initialize the map with the specific element ID, dimensions, and configurable max zoom
+                await mapModule.InvokeVoidAsync("initializeMap", mapElementId, Height, Width, 39.8283, -98.5795, (int)InitialZoom, MaxZoom);
                 mapInitialized = true;
 
                 // Create .NET object reference for JavaScript callbacks
@@ -227,11 +230,14 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
     private int DetermineZoomLevel(ClusterGroup cluster)
     {
-        // Determine appropriate zoom level based on cluster size and spread
-        if (cluster.Count == 1) return 8; // Individual location - zoom in close
-        if (cluster.AverageDistanceFromCenter < 50) return 6; // Tight cluster - medium zoom
-        if (cluster.AverageDistanceFromCenter < 200) return 5; // Moderate spread - wider view
-        return 4; // Large spread - wide view
+        // Determine appropriate zoom level based on cluster size and spread, respecting MaxZoom
+        int targetZoom;
+        if (cluster.Count == 1) targetZoom = 8; // Individual location - zoom in close
+        else if (cluster.AverageDistanceFromCenter < 50) targetZoom = 6; // Tight cluster - medium zoom
+        else if (cluster.AverageDistanceFromCenter < 200) targetZoom = 5; // Moderate spread - wider view
+        else targetZoom = 4; // Large spread - wide view
+        
+        return Math.Min(targetZoom, MaxZoom); // Respect the configured max zoom
     }
 
     private string GetLocationDescription(ClusterGroup cluster)
@@ -762,6 +768,49 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"Error setting zoom level: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Gets the current maximum zoom level
+    /// </summary>
+    public async Task<int> GetMaxZoomAsync()
+    {
+        if (!mapInitialized || mapModule == null) return MaxZoom;
+
+        try
+        {
+            return await mapModule.InvokeAsync<int>("getMaxZoom");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error getting max zoom level: {ex.Message}");
+            return MaxZoom;
+        }
+    }
+
+    /// <summary>
+    /// Sets the maximum zoom level after initialization
+    /// </summary>
+    /// <param name="maxZoom">The maximum zoom level to set</param>
+    public async Task<bool> SetMaxZoomAsync(int maxZoom)
+    {
+        if (!mapInitialized || mapModule == null) return false;
+
+        try
+        {
+            var result = await mapModule.InvokeAsync<bool>("setMaxZoom", maxZoom);
+            if (result)
+            {
+                MaxZoom = maxZoom; // Update the parameter value
+                Console.WriteLine($"Updated max zoom level to: {maxZoom}");
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error setting max zoom level: {ex.Message}");
+            return false;
         }
     }
 

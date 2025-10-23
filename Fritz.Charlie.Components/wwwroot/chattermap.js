@@ -3,6 +3,7 @@
 class ChatterMapManager {
     constructor() {
         this.map = null;
+        this.maxZoom = 6; // Default max zoom
         this.markerClusterGroups = new Map(); // Separate cluster groups per continent
         this.markers = new Map();
         this.allMarkerData = new Map(); // Store all marker data without adding to map
@@ -17,8 +18,8 @@ class ChatterMapManager {
         this.maxMarkersPerView = 1000; // Limit visible markers per viewport
     }
 
-    // Initialize the map with the specific element ID and dimensions
-    initializeMap(elementId, height, width, lat, lng, zoom) {
+    // Initialize the map with the specific element ID, dimensions, and configurable max zoom
+    initializeMap(elementId, height, width, lat, lng, zoom, maxZoom = 6) {
         this.elementId = elementId;
         const element = document.getElementById(elementId);
         
@@ -53,9 +54,11 @@ class ChatterMapManager {
             // Initialize continent-specific marker cluster groups to prevent cross-ocean clustering
             this.initializeClusterGroups();
             
-            // Set zoom constraints - Allow one more zoom level
+            // Set zoom constraints with configurable max zoom level
             this.map.setMinZoom(2);
-            this.map.setMaxZoom(6);
+
+            console.log(`Setting max zoom to: ${maxZoom}`); 
+            this.map.setMaxZoom(maxZoom);
 
             // Add event listeners for better UX and viewport management
             this.map.on('zoomstart', () => {
@@ -93,12 +96,42 @@ class ChatterMapManager {
                 this.throttleViewportUpdate();
             });
 
-            console.log(`Map initialized successfully on element ${elementId}`);
+            console.log(`Map initialized successfully on element ${elementId} with max zoom: ${maxZoom}`);
             return true;
         } catch (error) {
             console.error('Error initializing map:', error);
             return false;
         }
+    }
+
+    // Zoom to a specific location with smooth animation (respecting max zoom)
+    zoomToLocation(lat, lng, zoom = 5) {
+        if (!this.map) return;
+
+        const currentMaxZoom = this.map.getMaxZoom();
+        const targetZoom = Math.min(zoom, currentMaxZoom); // Respect configurable max zoom
+        console.log(`Zooming to ${lat}, ${lng} at zoom level ${targetZoom} (max: ${currentMaxZoom})`);
+        
+        this.map.flyTo([lat, lng], targetZoom, {
+            animate: true,
+            duration: 2.0,
+            easeLinearity: 0.25
+        });
+    }
+
+    // Get current max zoom level
+    getMaxZoom() {
+        return this.map ? this.map.getMaxZoom() : 6;
+    }
+
+    // Set new max zoom level (can be called after initialization)
+    setMaxZoom(maxZoom) {
+        if (this.map) {
+            this.map.setMaxZoom(maxZoom);
+            console.log(`Max zoom level updated to: ${maxZoom}`);
+            return true;
+        }
+        return false;
     }
 
     // Throttle viewport updates to prevent excessive recalculation during rapid map movements
@@ -142,7 +175,7 @@ class ChatterMapManager {
             visibleMarkerData.splice(maxVisible);
         }
         
-        console.log(`Viewport update: ${visibleMarkerData.length} markers visible (zoom: ${zoom}, max: ${maxVisible})`);
+        console.log(`Viewport update: ${visibleMarkerData.length} markers visible (zoom: ${zoom}, max: ${maxVisible}, maxZoom: ${this.getMaxZoom()})`);
         
         // Remove markers no longer in viewport
         for (const markerId of this.visibleMarkers) {
@@ -161,13 +194,16 @@ class ChatterMapManager {
         }
     }
 
-    // Get maximum visible markers based on zoom level
+    // Get maximum visible markers based on zoom level (adjusted for higher zoom levels)
     getMaxVisibleMarkers(zoom) {
+        const maxZoom = this.getMaxZoom();
+        
+        // Adjust thresholds based on actual max zoom level
         switch(true) {
             case zoom <= 2: return 50;   // World view - very few markers
             case zoom <= 3: return 150;  // Continental view
             case zoom <= 4: return 300;  // Regional view
-            case zoom <= 5: return 600;  // City view
+            case zoom <= Math.min(5, maxZoom - 1): return 600;  // City view
             default: return 1000;        // Detailed view - more markers
         }
     }
@@ -190,6 +226,7 @@ class ChatterMapManager {
         continents.forEach(continent => {
             const clusterGroup = L.markerClusterGroup({
                 maxClusterRadius: (zoom) => {
+                    const maxZoom = this.getMaxZoom();
                     // More aggressive clustering radius to handle larger datasets
                     // Lower zoom = much tighter clustering, Higher zoom = more aggressive grouping
                     switch(zoom) {
@@ -199,7 +236,7 @@ class ChatterMapManager {
                         case 4: return 100; // Medium-strong clustering at regional view
                         case 5: return 90; // Medium clustering at city view
                         case 6: return 60;  // Moderate clustering at detailed view
-                        default: return zoom <= 3 ? 180 : 100; // Default based on zoom range
+                        default: return zoom <= 3 ? 180 : zoom >= maxZoom ? 40 : 100; // Adjusted for variable max zoom
                     }
                 },
                 spiderfyOnMaxZoom: true,
@@ -207,7 +244,7 @@ class ChatterMapManager {
                 zoomToBoundsOnClick: true,
                 animate: true,
                 animateAddingMarkers: false, // Disable for better performance with many markers
-                disableClusteringAtZoom: 7, // Disable clustering at highest zoom level
+                disableClusteringAtZoom: Math.min(getMaxZoom() + 1, 7), // Disable clustering at max zoom + 1
                 maxClusterSize: 100, // Limit cluster size for performance
                 iconCreateFunction: (cluster) => {
                     const childCount = cluster.getChildCount();
@@ -458,20 +495,6 @@ class ChatterMapManager {
         return "OCN";
     }
 
-    // Zoom to a specific location with smooth animation
-    zoomToLocation(lat, lng, zoom = 5) {
-        if (!this.map) return;
-
-        const targetZoom = Math.min(zoom, 5); // Respect max zoom
-        console.log(`Zooming to ${lat}, ${lng} at zoom level ${targetZoom}`);
-        
-        this.map.flyTo([lat, lng], targetZoom, {
-            animate: true,
-            duration: 2.0,
-            easeLinearity: 0.25
-        });
-    }
-
     // Start tour with enhanced navigation
     startTour(tourStops) {
         if (!this.map || !tourStops || tourStops.length === 0) {
@@ -587,8 +610,9 @@ class ChatterMapManager {
         // Update region overlay with current stop info
         this.updateRegionOverlay(stop.description, stop.locationCount || stop.locations?.length || 0);
         
-        // Fly to the tour stop with appropriate zoom
-        this.map.flyTo([stop.lat, stop.lng], stop.zoom || 4, {
+        // Fly to the tour stop with appropriate zoom (respecting max zoom)
+        const targetZoom = Math.min(stop.zoom || 4, this.getMaxZoom());
+        this.map.flyTo([stop.lat, stop.lng], targetZoom, {
             animate: true,
             duration: 2.5,
             easeLinearity: 0.25
@@ -719,15 +743,15 @@ class ChatterMapManager {
 let mapInstance = null;
 
 // Exported functions for .NET interop
-export function initializeMap(elementId, height, width, lat, lng, zoom) {
-    console.log(`Initializing map for element ${elementId}`);
+export function initializeMap(elementId, height, width, lat, lng, zoom, maxZoom = 6) {
+    console.log(`Initializing map for element ${elementId} with max zoom: ${maxZoom}`);
     
     if (mapInstance) {
         mapInstance.dispose();
     }
     
     mapInstance = new ChatterMapManager();
-    return mapInstance.initializeMap(elementId, height, width, lat, lng, zoom);
+    return mapInstance.initializeMap(elementId, height, width, lat, lng, zoom, maxZoom);
 }
 
 export function addMarker(id, lat, lng, userType, description, service) {
@@ -755,6 +779,20 @@ export function zoomToLocation(lat, lng, zoom) {
     if (mapInstance) {
         mapInstance.zoomToLocation(lat, lng, zoom);
     }
+}
+
+export function getMaxZoom() {
+    if (mapInstance) {
+        return mapInstance.getMaxZoom();
+    }
+    return 6; // Default value
+}
+
+export function setMaxZoom(maxZoom) {
+    if (mapInstance) {
+        return mapInstance.setMaxZoom(maxZoom);
+    }
+    return false;
 }
 
 export function startTour(tourStops) {
