@@ -5,7 +5,8 @@ class ChatterMapManager {
         this.map = null;
         this.maxZoom = 6; // Default max zoom
         this.markerClusterGroups = new Map(); // Separate cluster groups per continent
-        this.markers = new Map();
+        this.markers = new Map(); // Map of ID -> {marker, continentCode}
+        this.markerToIdMap = new Map(); // Reverse lookup - Leaflet marker -> ID for O(1) lookup
         this.allMarkerData = new Map(); // Store all marker data without adding to map
         this.visibleMarkers = new Set(); // Track currently visible markers
         this.tourActive = false;
@@ -251,19 +252,21 @@ class ChatterMapManager {
                     const markers = cluster.getAllChildMarkers();
                     let totalViewers = 0;
 
-                    // Sum up the viewer counts from each marker
+                    // OPTIMIZED: Use reverse lookup Map for O(1) performance instead of nested loop
                     markers.forEach(marker => {
-                        const markerId = Object.keys(this.markers).find(id =>
-                            this.markers.get(id)?.marker === marker
-                        );
+                        const markerId = this.markerToIdMap.get(marker);
                         if (markerId) {
                             const markerData = this.allMarkerData.get(markerId);
-                            totalViewers += (markerData?.count || 1);
+                            const viewerCount = markerData?.count || 1;
+                            totalViewers += viewerCount;
                         } else {
                             // Fallback if marker data not found
                             totalViewers += 1;
+                            console.warn('Cluster: Marker not found in reverse lookup, counting as 1');
                         }
                     });
+
+                    console.log(`Cluster created with ${markers.length} location markers representing ${totalViewers} total viewers`);
 
                     // Use totalViewers instead of childCount for display
                     const childCount = totalViewers;
@@ -487,6 +490,9 @@ class ChatterMapManager {
 
         // Store marker reference with continent info
         this.markers.set(id, { marker, continentCode });
+        
+        // Maintain reverse lookup for O(1) cluster aggregation
+        this.markerToIdMap.set(marker, id);
 
         // Add to appropriate continent cluster group
         clusterGroup.addLayer(marker);
@@ -495,17 +501,21 @@ class ChatterMapManager {
     // Internal method to remove marker from visible map
     removeMarkerFromMap(id) {
      const markerInfo = this.markers.get(id);
-  if (markerInfo) {
-            const { marker, continentCode } = markerInfo;
+    if (markerInfo) {
+       const { marker, continentCode } = markerInfo;
  const clusterGroup = this.markerClusterGroups.get(continentCode);
-            
-    if (clusterGroup) {
- clusterGroup.removeLayer(marker);
-   this.markers.delete(id);
-         return true;
-            }
+   
+  if (clusterGroup) {
+  clusterGroup.removeLayer(marker);
+          this.markers.delete(id);
+           
+          // Clean up reverse lookup
+          this.markerToIdMap.delete(marker);
+                
+ return true;
+      }
         }
-        return false;
+ return false;
     }
 
     // Remove a marker from the map (modified to support viewport optimization and aggregation)
@@ -532,7 +542,11 @@ class ChatterMapManager {
             this.markers.clear();
             this.allMarkerData.clear();
             this.visibleMarkers.clear();
-            console.log('Cleared all markers from all continents');
+            
+            // Clear reverse lookup
+            this.markerToIdMap.clear();
+            
+console.log('Cleared all markers from all continents');
         }
     }
 
@@ -845,6 +859,10 @@ class ChatterMapManager {
         this.allMarkerData.clear();
         this.visibleMarkers.clear();
         this.markerClusterGroups.clear();
+        
+        // Clear reverse lookup
+        this.markerToIdMap.clear();
+   
         this.tourStops = [];
         this.tourActive = false;
         this.currentTourIndex = 0;
