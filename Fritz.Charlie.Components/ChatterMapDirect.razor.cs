@@ -792,6 +792,50 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             Console.WriteLine($"WARNING: Error during component disposal: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Optional custom icon provider for marker icons.
+    /// If not provided, default icon logic will be used.
+    /// </summary>
+    [Inject]
+    public IMapIconProvider? IconProvider { get; set; }
+
+    /// <summary>
+    /// Callback method invoked from JavaScript to get the icon URL for a marker
+    /// </summary>
+    /// <param name="userType">User type (broadcaster, moderator, subscriber, vip, user)</param>
+    /// <param name="service">Service name (Twitch, YouTube, etc.)</param>
+    /// <returns>Icon URL string or null to use JavaScript fallback</returns>
+    [JSInvokable]
+    public Task<string?> GetIconUrl(string userType, string service)
+    {
+        try
+        {
+
+            Console.WriteLine($"CustomIconProvider is of type : {(IconProvider != null ? IconProvider.GetType().FullName : "null")}");
+
+            // If a custom icon provider is configured, use it first
+            if (IconProvider != null)
+            {
+                Console.WriteLine($"Invoking custom icon provider for userType='{userType}', service='{service}'");
+                var customIconUrl = IconProvider.GetIconUrl(userType, service);
+                if (!string.IsNullOrEmpty(customIconUrl))
+                {
+                    Console.WriteLine($"Custom icon URL provided: {customIconUrl}");
+                    return Task.FromResult<string?>(customIconUrl);
+                }
+            }
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in GetIconUrl callback: {ex.Message}");
+            // Return null on error to let JavaScript use fallback
+        }
+        Console.WriteLine($"No custom icon URL provided for userType='{userType}', service='{service}'. Using default.");
+        return Task.FromResult<string?>(null);
+    }
+
 }
 
 public enum MapZoomLevel

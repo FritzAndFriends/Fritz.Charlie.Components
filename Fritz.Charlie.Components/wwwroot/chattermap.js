@@ -147,7 +147,7 @@ class ChatterMapManager {
     }
 
     // Update visible markers based on current viewport and zoom level
-    updateVisibleMarkers() {
+    async updateVisibleMarkers() {
         if (!this.map || this.allMarkerData.size === 0) return;
 
         const bounds = this.map.getBounds();
@@ -186,10 +186,10 @@ class ChatterMapManager {
             }
         }
 
-        // Add new markers in viewport
+        // Add new markers in viewport - now with proper await
         for (const markerData of visibleMarkerData) {
             if (!this.visibleMarkers.has(markerData.id)) {
-                this.addMarkerToMap(markerData);
+                await this.addMarkerToMap(markerData);
                 this.visibleMarkers.add(markerData.id);
             }
         }
@@ -316,7 +316,7 @@ class ChatterMapManager {
     }
 
     // Add a marker to the map with count support (modified to support aggregation)
-    addMarker(id, lat, lng, userType, description, service, count = 1) {
+    async addMarker(id, lat, lng, userType, description, service, count = 1) {
         if (!this.map || this.markerClusterGroups.size === 0) {
             console.error('Map not initialized');
             return false;
@@ -339,7 +339,7 @@ class ChatterMapManager {
 
             // Only add to map if it would be visible in current viewport
             if (this.map.getBounds().pad(0.1).contains([lat, lng])) {
-                this.addMarkerToMap({ id, ...markerData });
+                await this.addMarkerToMap({ id, ...markerData });
                 this.visibleMarkers.add(id);
             }
 
@@ -351,107 +351,49 @@ class ChatterMapManager {
         }
     }
 
-    // Update an existing aggregated marker with new count and popup content
-    updateAggregatedMarker(id, count, popupContent) {
-        if (!this.map) {
-            console.error('Map not initialized');
-            return false;
-        }
+    // Zoom to a specific location with smooth animation (respecting max zoom)
+    zoomToLocation(lat, lng, zoom = 5) {
+        if (!this.map) return;
 
-        try {
-            const markerInfo = this.markers.get(id);
-            if (!markerInfo) {
-                console.warn(`Marker ${id} not found for update`);
-                return false;
-            }
+        const currentMaxZoom = this.map.getMaxZoom();
+        const targetZoom = Math.min(zoom, currentMaxZoom); // Respect configurable max zoom
+        console.log(`Zooming to ${lat}, ${lng} at zoom level ${targetZoom} (max: ${currentMaxZoom})`);
 
-            const { marker, continentCode } = markerInfo;
-            const markerData = this.allMarkerData.get(id);
-
-            if (!markerData) {
-                console.warn(`Marker data for ${id} not found`);
-                return false;
-            }
-
-            // Update stored count
-            markerData.count = count;
-            this.allMarkerData.set(id, markerData);
-
-            // Update the marker icon with new count
-            const iconUrl = this.getIconUrl(markerData.userType, markerData.service);
-            const icon = this.createMarkerIcon(iconUrl, count, markerData.userType);
-            marker.setIcon(icon);
-
-            // Update popup content
-            marker.setPopupContent(popupContent);
-
-            // Refresh the cluster to update viewer counts in cluster icons
-            const clusterGroup = this.markerClusterGroups.get(continentCode);
-            if (clusterGroup) {
-                // Remove and re-add the marker to force cluster refresh
-                clusterGroup.removeLayer(marker);
-                clusterGroup.addLayer(marker);
-                
-                // Force cluster icon refresh by triggering a view refresh
-                clusterGroup.refreshClusters();
-            }
-
-            console.log(`Updated aggregated marker ${id} with count ${count} and refreshed cluster`);
-            return true;
-        } catch (error) {
-            console.error(`Error updating aggregated marker ${id}:`, error);
-            return false;
-        }
+        this.map.flyTo([lat, lng], targetZoom, {
+            animate: true,
+            duration: 2.0,
+            easeLinearity: 0.25
+        });
     }
 
-    // Create a marker icon with optional count badge
-    createMarkerIcon(iconUrl, count, userType) {
-        if (count <= 1) {
-            // Standard icon without badge
-            return L.icon({
-                iconUrl: iconUrl,
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
-                popupAnchor: [0, -10],
-                className: `marker-${userType.toLowerCase()}`
-            });
-        } else {
-            // Create custom icon with count badge
-            const html = `
-                <div style="position: relative; width: 24px; height: 24px;">
-           <img src="${iconUrl}" style="width: 20px; height: 20px;" />
-          <div style="
-    position: absolute;
-         top: -8px;
-          right: -8px;
-              background: #dc3545;
-   color: white;
-   border-radius: 50%;
-          width: 18px;
-            height: 18px;
-     display: flex;
-             align-items: center;
-   justify-content: center;
-   font-size: 10px;
-  font-weight: bold;
-     border: 2px solid white;
-           box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-   ">${count}</div>
-                </div>
-      `;
+    // Get current max zoom level
+    getMaxZoom() {
+        return this.map ? this.map.getMaxZoom() : 6;
+    }
 
-            return L.divIcon({
-                html: html,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12],
-                popupAnchor: [0, -12],
-                className: `marker-${userType.toLowerCase()}-aggregated`
-            });
+    // Set new max zoom level (can be called after initialization)
+    setMaxZoom(maxZoom) {
+        if (this.map) {
+            this.map.setMaxZoom(maxZoom);
+            console.log(`Max zoom level updated to: ${maxZoom}`);
+            return true;
         }
+        return false;
+    }
+
+    // Throttle viewport updates to prevent excessive recalculation during rapid map movements
+    throttleViewportUpdate() {
+        if (this.viewportUpdateThrottle) {
+            clearTimeout(this.viewportUpdateThrottle);
+        }
+
+        this.viewportUpdateThrottle = setTimeout(() => {
+            this.updateVisibleMarkers();
+        }, 150); // Wait 150ms after map movement stops
     }
 
     // Internal method to add marker to the visible map (modified to support count)
-    addMarkerToMap(markerData) {
+    async addMarkerToMap(markerData) {
         const { id, lat, lng, userType, description, service, continentCode, count = 1 } = markerData;
 
         const clusterGroup = this.markerClusterGroups.get(continentCode);
@@ -460,7 +402,7 @@ class ChatterMapManager {
             return false;
         }
 
-        const iconUrl = this.getIconUrl(userType, service);
+        const iconUrl = await this.getIconUrl(userType, service);
         const icon = this.createMarkerIcon(iconUrl, count, userType);
 
         const marker = L.marker([lat, lng], {
@@ -490,7 +432,7 @@ class ChatterMapManager {
 
         // Store marker reference with continent info
         this.markers.set(id, { marker, continentCode });
-        
+
         // Maintain reverse lookup for O(1) cluster aggregation
         this.markerToIdMap.set(marker, id);
 
@@ -498,38 +440,211 @@ class ChatterMapManager {
         clusterGroup.addLayer(marker);
     }
 
+    // Update an existing aggregated marker with new count and popup content
+    async updateAggregatedMarker(id, count, popupContent) {
+        if (!this.map) {
+            console.error('Map not initialized');
+            return false;
+        }
+
+        try {
+            const markerInfo = this.markers.get(id);
+            if (!markerInfo) {
+                console.warn(`Marker ${id} not found for update`);
+                return false;
+            }
+
+            const { marker, continentCode } = markerInfo;
+            const markerData = this.allMarkerData.get(id);
+
+            if (!markerData) {
+                console.warn(`Marker data for ${id} not found`);
+                return false;
+            }
+
+            // Update stored count
+            markerData.count = count;
+            this.allMarkerData.set(id, markerData);
+
+            // Update the marker icon with new count
+            const iconUrl = await this.getIconUrl(markerData.userType, markerData.service);
+            const icon = this.createMarkerIcon(iconUrl, count, markerData.userType);
+            marker.setIcon(icon);
+
+            // Update popup content
+            marker.setPopupContent(popupContent);
+
+            // Refresh the cluster to update viewer counts in cluster icons
+            const clusterGroup = this.markerClusterGroups.get(continentCode);
+            if (clusterGroup) {
+                // Remove and re-add the marker to force cluster refresh
+                clusterGroup.removeLayer(marker);
+                clusterGroup.addLayer(marker);
+
+                // Force cluster icon refresh by triggering a view refresh
+                clusterGroup.refreshClusters();
+            }
+
+            console.log(`Updated aggregated marker ${id} with count ${count} and refreshed cluster`);
+            return true;
+        } catch (error) {
+            console.error(`Error updating aggregated marker ${id}:`, error);
+            return false;
+        }
+    }
+
+    // Get maximum visible markers based on zoom level (adjusted for higher zoom levels)
+    getMaxVisibleMarkers(zoom) {
+        const maxZoom = this.getMaxZoom();
+
+        // Adjust thresholds based on actual max zoom level
+        switch (true) {
+            case zoom <= 2: return 50;   // World view - very few markers
+            case zoom <= 3: return 150;  // Continental view
+            case zoom <= 4: return 300;  // Regional view
+            case zoom <= Math.min(5, maxZoom - 1): return 600;  // City view
+            default: return 1000;        // Detailed view - more markers
+        }
+    }
+
+    // Get user type priority for marker visibility
+    getUserTypePriority(userType) {
+        switch (userType?.toLowerCase()) {
+            case 'broadcaster': return 4;
+            case 'moderator': return 3;
+            case 'subscriber':
+            case 'vip': return 2;
+            default: return 1;
+        }
+    }
+
+    // Initialize continent-specific cluster groups to prevent cross-ocean clustering
+    initializeClusterGroups() {
+        const continents = ['NAM', 'SAM', 'EUR', 'AFR', 'ASI', 'SEA', 'OCE', 'ANT', 'OCN'];
+
+        continents.forEach(continent => {
+            const clusterGroup = L.markerClusterGroup({
+                maxClusterRadius: (zoom) => {
+                    const maxZoom = this.getMaxZoom();
+                    // More aggressive clustering radius to handle larger datasets
+                    // Lower zoom = much tighter clustering, Higher zoom = more aggressive grouping
+                    switch (zoom) {
+                        case 1: return 180; // Very aggressive clustering at world view
+                        case 2: return 150; // Aggressive clustering at world view  
+                        case 3: return 120; // Strong clustering at continental view
+                        case 4: return 100; // Medium-strong clustering at regional view
+                        case 5: return 90; // Medium clustering at city view
+                        case 6: return 60;  // Moderate clustering at detailed view
+                        default: return zoom <= 3 ? 180 : zoom >= maxZoom ? 40 : 100; // Adjusted for variable max zoom
+                    }
+                },
+                spiderfyOnMaxZoom: true,
+                showCoverageOnHover: false,
+                zoomToBoundsOnClick: true,
+                animate: true,
+                animateAddingMarkers: false, // Disable for better performance with many markers
+                disableClusteringAtZoom: Math.min(this.getMaxZoom() + 1, 7), // Disable clustering at max zoom + 1
+                maxClusterSize: 100, // Limit cluster size for performance
+                iconCreateFunction: (cluster) => {
+                    // Calculate total viewer count from all markers in cluster
+                    const markers = cluster.getAllChildMarkers();
+                    let totalViewers = 0;
+
+                    // OPTIMIZED: Use reverse lookup Map for O(1) performance instead of nested loop
+                    markers.forEach(marker => {
+                        const markerId = this.markerToIdMap.get(marker);
+                        if (markerId) {
+                            const markerData = this.allMarkerData.get(markerId);
+                            const viewerCount = markerData?.count || 1;
+                            totalViewers += viewerCount;
+                        } else {
+                            // Fallback if marker data not found
+                            totalViewers += 1;
+                            console.warn('Cluster: Marker not found in reverse lookup, counting as 1');
+                        }
+                    });
+
+                    console.log(`Cluster created with ${markers.length} location markers representing ${totalViewers} total viewers`);
+
+                    // Use totalViewers instead of childCount for display
+                    const childCount = totalViewers;
+
+                    // Define royal blue to dark purple gradient colors based on viewer count
+                    let backgroundColor, textColor;
+                    if (childCount < 10) {
+                        backgroundColor = '#4169E1'; // Royal Blue
+                        textColor = '#FFFFFF';
+                    } else if (childCount < 25) {
+                        backgroundColor = '#6A5ACD'; // Slate Blue
+                        textColor = '#FFFFFF';
+                    } else if (childCount < 50) {
+                        backgroundColor = '#8A2BE2'; // Blue Violet
+                        textColor = '#FFFFFF';
+                    } else if (childCount < 100) {
+                        backgroundColor = '#9932CC'; // Dark Orchid
+                        textColor = '#FFFFFF';
+                    } else {
+                        backgroundColor = '#4B0082'; // Indigo (Dark Purple)
+                        textColor = '#FFFFFF';
+                    }
+
+                    // Calculate icon size based on viewer count
+                    let iconSize;
+                    if (childCount < 10) {
+                        iconSize = 30;
+                    } else if (childCount < 50) {
+                        iconSize = 35;
+                    } else if (childCount < 100) {
+                        iconSize = 40;
+                    } else {
+                        iconSize = 45;
+                    }
+
+                    return new L.DivIcon({
+                        html: `<div style="background-color: ${backgroundColor}; color: ${textColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: ${Math.max(10, iconSize * 0.3)}px; border: 2px solid rgba(255, 255, 255, 0.8); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);"><span>${childCount}</span></div>`,
+                        className: 'marker-cluster-custom',
+                        iconSize: new L.Point(iconSize, iconSize)
+                    });
+                }
+            });
+
+            this.markerClusterGroups.set(continent, clusterGroup);
+            this.map.addLayer(clusterGroup);
+        });
+    }
+
     // Internal method to remove marker from visible map
     removeMarkerFromMap(id) {
-     const markerInfo = this.markers.get(id);
-    if (markerInfo) {
-       const { marker, continentCode } = markerInfo;
- const clusterGroup = this.markerClusterGroups.get(continentCode);
-   
-  if (clusterGroup) {
-  clusterGroup.removeLayer(marker);
-          this.markers.delete(id);
-           
-          // Clean up reverse lookup
-          this.markerToIdMap.delete(marker);
-                
- return true;
-      }
+        const markerInfo = this.markers.get(id);
+        if (markerInfo) {
+            const { marker, continentCode } = markerInfo;
+            const clusterGroup = this.markerClusterGroups.get(continentCode);
+
+            if (clusterGroup) {
+                clusterGroup.removeLayer(marker);
+                this.markers.delete(id);
+
+                // Clean up reverse lookup
+                this.markerToIdMap.delete(marker);
+
+                return true;
+            }
         }
- return false;
+        return false;
     }
 
     // Remove a marker from the map (modified to support viewport optimization and aggregation)
     removeMarker(id) {
- // Remove from data store
+        // Remove from data store
         this.allMarkerData.delete(id);
-        
+
         // Remove from visible markers if it's currently visible
-    if (this.visibleMarkers.has(id)) {
+        if (this.visibleMarkers.has(id)) {
             this.removeMarkerFromMap(id);
-  this.visibleMarkers.delete(id);
-     }
-        
-   console.log(`Removed marker ${id}`);
+            this.visibleMarkers.delete(id);
+        }
+
+        console.log(`Removed marker ${id}`);
         return true;
     }
 
@@ -542,34 +657,84 @@ class ChatterMapManager {
             this.markers.clear();
             this.allMarkerData.clear();
             this.visibleMarkers.clear();
-            
+
             // Clear reverse lookup
             this.markerToIdMap.clear();
-            
-console.log('Cleared all markers from all continents');
+
+            console.log('Cleared all markers from all continents');
         }
     }
 
-    // Get appropriate icon URL based on user type and service
-    getIconUrl(userType, service) {
-        // Simple colored pins for demo
-        if (service === 'YouTube') {
-            return '/img/map/red.png';
+    // Create a marker icon with optional count badge
+    createMarkerIcon(iconUrl, count, userType) {
+        if (count <= 1) {
+            // Standard icon without badge
+            return L.icon({
+                iconUrl: iconUrl,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+                popupAnchor: [0, -10],
+                className: `marker-${userType.toLowerCase()}`
+            });
+        } else {
+            // Create custom icon with count badge
+            const html = `
+      <div style="position: relative; width: 24px; height: 24px;">
+    <img src="${iconUrl}" style="width: 20px; height: 20px;" />
+            <div style="
+         position: absolute;
+          top: -8px;
+        right: -8px;
+           background: #dc3545;
+       color: white;
+   border-radius: 50%;
+      width: 18px;
+ height: 18px;
+        display: flex;
+      align-items: center;
+             justify-content: center;
+      font-size: 10px;
+  font-weight: bold;
+            border: 2px solid white;
+   box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+ ">${count}</div>
+                </div>
+            `;
+
+            return L.divIcon({
+                html: html,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12],
+                popupAnchor: [0, -12],
+                className: `marker-${userType.toLowerCase()}-aggregated`
+            });
+        }
+    }
+
+    async getIconUrl(userType, service) {
+        // Try to get icon URL from C# callback first
+        if (this.dotNetObjectRef) {
+            try {
+                const iconUrl = await this.dotNetObjectRef.invokeMethodAsync('GetIconUrl', userType, service);
+                if (iconUrl) {
+                    console.log(`Got icon URL from C#: ${iconUrl} for ${userType}/${service}`);
+                    return iconUrl;
+                } else {
+                    return getDefaultIconUrl(userType, service);
+                }
+            } catch (error) {
+                console.warn('Failed to get icon URL from C#, using JavaScript fallback:', error);
+            }
         }
 
-        // Original hat icons (commented out for demo)
-        switch (userType.toLowerCase()) {
-            case 'broadcaster':
-                return '/img/map/fritz.png';
-            case 'moderator':
-                return '/img/map/mod.png';
-            case 'subscriber':
-            case 'vip':
-                return '/img/map/sub.png';
-            case 'user':
-            default:
-                return '/img/map/user.png';
-        }
+        // Fallback to JavaScript-side defaults if C# callback fails or returns null
+        return this.getDefaultIconUrl(userType, service);
+    }
+
+    // Default icon URL logic (fallback when C# doesn't provide custom icons)
+    getDefaultIconUrl(userType, service) {
+
+        return "/_content/Fritz.Charlie.Components/img/pin.webp";
 
     }
 
@@ -859,10 +1024,10 @@ console.log('Cleared all markers from all continents');
         this.allMarkerData.clear();
         this.visibleMarkers.clear();
         this.markerClusterGroups.clear();
-        
+
         // Clear reverse lookup
         this.markerToIdMap.clear();
-   
+
         this.tourStops = [];
         this.tourActive = false;
         this.currentTourIndex = 0;
