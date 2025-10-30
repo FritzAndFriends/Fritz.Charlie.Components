@@ -789,6 +789,176 @@ top: 50%;
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    // Internal method to remove marker from visible map
+    removeMarkerFromMap(id) {
+        const markerInfo = this.markers.get(id);
+        if (markerInfo) {
+            const { marker, continentCode } = markerInfo;
+            const clusterGroup = this.markerClusterGroups.get(continentCode);
+            
+            if (clusterGroup) {
+                clusterGroup.removeLayer(marker);
+                this.markers.delete(id);
+
+                // Clean up reverse lookup
+                this.markerToIdMap.delete(marker);
+
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Remove a marker from the map (modified to support viewport optimization and aggregation)
+    removeMarker(id) {
+        // Remove from data store
+        this.allMarkerData.delete(id);
+
+        // Remove from visible markers if it's currently visible
+        if (this.visibleMarkers.has(id)) {
+            this.removeMarkerFromMap(id);
+            this.visibleMarkers.delete(id);
+        }
+
+        console.log(`Removed marker ${id}`);
+        return true;
+    }
+
+    // Clear all markers
+    clearMarkers() {
+        if (this.markerClusterGroups.size > 0) {
+            this.markerClusterGroups.forEach(clusterGroup => {
+                clusterGroup.clearLayers();
+            });
+            this.markers.clear();
+            this.allMarkerData.clear();
+            this.visibleMarkers.clear();
+
+            // Clear reverse lookup
+            this.markerToIdMap.clear();
+
+            console.log('Cleared all markers from all continents');
+        }
+    }
+
+    // Start tour with enhanced navigation
+    startTour(tourStops) {
+        if (!this.map || !tourStops || tourStops.length === 0) {
+            console.error('Cannot start tour: invalid parameters');
+            return;
+        }
+
+        console.log(`Starting tour with ${tourStops.length} stops`);
+        this.tourActive = true;
+        this.tourStops = tourStops;
+        this.currentTourIndex = 0;
+
+        // Notify C# component that tour has started
+        this.notifyTourStatusChanged();
+
+        // Start the tour immediately with the first location
+        this.continueTour();
+    }
+
+    // Continue tour to next location
+    continueTour() {
+        if (!this.tourActive || this.currentTourIndex >= this.tourStops.length) {
+            console.log('Tour completed - reached end of stops');
+            this.stopTour();
+            return;
+        }
+
+        // Safety check - if user has manually zoomed out, stop the tour
+        if (this.map && this.map.getZoom() <= 2 && this.currentTourIndex > 0) {
+            console.log('Tour stopped due to zoom level');
+            this.stopTour();
+            return;
+        }
+
+        const stop = this.tourStops[this.currentTourIndex];
+        console.log(`Tour stop ${this.currentTourIndex + 1}/${this.tourStops.length}: ${stop.description}`);
+
+        // Fly to the tour stop with appropriate zoom (respecting max zoom)
+        const targetZoom = Math.min(stop.zoom || 4, this.getMaxZoom());
+        this.map.flyTo([stop.lat, stop.lng], targetZoom, {
+            animate: true,
+            duration: 2.5,
+            easeLinearity: 0.25
+        });
+
+        this.currentTourIndex++;
+
+        // Notify C# component of tour progress
+        this.notifyTourStatusChanged();
+
+        // Schedule next tour stop with safety check
+        this.tourTimer = setTimeout(() => {
+            if (this.tourActive) { // Double-check tour is still active
+                this.continueTour();
+            }
+        }, 5000);
+    }
+
+    // Stop tour and return to world view
+    stopTour() {
+        if (!this.tourActive) {
+            console.log('Tour already stopped');
+            return; // Already stopped
+        }
+
+        console.log('Stopping tour and resetting state');
+        this.tourActive = false;
+        this.currentTourIndex = 0;
+        this.tourStops = []; // Clear tour stops to ensure clean state
+
+        if (this.tourTimer) {
+            clearTimeout(this.tourTimer);
+            this.tourTimer = null;
+        }
+
+        // Return to world view centered over the Atlantic Ocean with smooth animation
+        // Only if not already at world view
+        if (this.map && this.map.getZoom() > 2) {
+            this.map.flyTo([15, -30], 2, {
+                animate: true,
+                duration: 3.0,
+                easeLinearity: 0.25
+            });
+        }
+
+        console.log('Tour stopped - state should now show inactive');
+
+        // Notify C# component that tour has ended
+        this.notifyTourStatusChanged();
+    }
+
+    // Notify C# component of tour status changes
+    notifyTourStatusChanged() {
+        if (this.dotNetObjectRef) {
+            try {
+                this.dotNetObjectRef.invokeMethodAsync('OnTourStatusChanged',
+                    this.tourActive,
+                    this.currentTourIndex,
+                    this.tourStops.length);
+                console.log(`Notified C# of tour status: active=${this.tourActive}, index=${this.currentTourIndex}, total=${this.tourStops.length}`);
+            } catch (error) {
+                console.error('Error notifying C# of tour status change:', error);
+            }
+        } else {
+            console.warn('No .NET object reference available for tour status notification');
+        }
+    }
+
+    // Get current tour status
+    getTourStatus() {
+        const status = {
+            active: this.tourActive,
+            currentIndex: this.currentTourIndex,
+            totalLocations: this.tourStops.length
+        };
+        return status;
+    }
+
     // Set the .NET object reference for callbacks
     setDotNetReference(dotNetObjectRef) {
         this.dotNetObjectRef = dotNetObjectRef;
