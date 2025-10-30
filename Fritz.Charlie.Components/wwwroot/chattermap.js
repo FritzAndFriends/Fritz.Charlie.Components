@@ -228,17 +228,7 @@ class ChatterMapManager {
             const clusterGroup = L.markerClusterGroup({
                 maxClusterRadius: (zoom) => {
                     const maxZoom = this.getMaxZoom();
-                    // More aggressive clustering radius to handle larger datasets
-                    // Lower zoom = much tighter clustering, Higher zoom = more aggressive grouping
-                    switch (zoom) {
-                        case 1: return 180; // Very aggressive clustering at world view
-                        case 2: return 150; // Aggressive clustering at world view  
-                        case 3: return 120; // Strong clustering at continental view
-                        case 4: return 100; // Medium-strong clustering at regional view
-                        case 5: return 90; // Medium clustering at city view
-                        case 6: return 60;  // Moderate clustering at detailed view
-                        default: return zoom <= 3 ? 180 : zoom >= maxZoom ? 40 : 100; // Adjusted for variable max zoom
-                    }
+                    return 30;
                 },
                 spiderfyOnMaxZoom: true,
                 showCoverageOnHover: false,
@@ -516,101 +506,6 @@ class ChatterMapManager {
             case 'vip': return 2;
             default: return 1;
         }
-    }
-
-    // Initialize continent-specific cluster groups to prevent cross-ocean clustering
-    initializeClusterGroups() {
-        const continents = ['NAM', 'SAM', 'EUR', 'AFR', 'ASI', 'SEA', 'OCE', 'ANT', 'OCN'];
-
-        continents.forEach(continent => {
-            const clusterGroup = L.markerClusterGroup({
-                maxClusterRadius: (zoom) => {
-                    const maxZoom = this.getMaxZoom();
-                    // More aggressive clustering radius to handle larger datasets
-                    // Lower zoom = much tighter clustering, Higher zoom = more aggressive grouping
-                    switch (zoom) {
-                        case 1: return 180; // Very aggressive clustering at world view
-                        case 2: return 150; // Aggressive clustering at world view  
-                        case 3: return 120; // Strong clustering at continental view
-                        case 4: return 100; // Medium-strong clustering at regional view
-                        case 5: return 90; // Medium clustering at city view
-                        case 6: return 60;  // Moderate clustering at detailed view
-                        default: return zoom <= 3 ? 180 : zoom >= maxZoom ? 40 : 100; // Adjusted for variable max zoom
-                    }
-                },
-                spiderfyOnMaxZoom: true,
-                showCoverageOnHover: false,
-                zoomToBoundsOnClick: true,
-                animate: true,
-                animateAddingMarkers: false, // Disable for better performance with many markers
-                disableClusteringAtZoom: Math.min(this.getMaxZoom() + 1, 7), // Disable clustering at max zoom + 1
-                maxClusterSize: 100, // Limit cluster size for performance
-                iconCreateFunction: (cluster) => {
-                    // Calculate total viewer count from all markers in cluster
-                    const markers = cluster.getAllChildMarkers();
-                    let totalViewers = 0;
-
-                    // OPTIMIZED: Use reverse lookup Map for O(1) performance instead of nested loop
-                    markers.forEach(marker => {
-                        const markerId = this.markerToIdMap.get(marker);
-                        if (markerId) {
-                            const markerData = this.allMarkerData.get(markerId);
-                            const viewerCount = markerData?.count || 1;
-                            totalViewers += viewerCount;
-                        } else {
-                            // Fallback if marker data not found
-                            totalViewers += 1;
-                            console.warn('Cluster: Marker not found in reverse lookup, counting as 1');
-                        }
-                    });
-
-                    console.log(`Cluster created with ${markers.length} location markers representing ${totalViewers} total viewers`);
-
-                    // Use totalViewers instead of childCount for display
-                    const childCount = totalViewers;
-
-                    // Define royal blue to dark purple gradient colors based on viewer count
-                    let backgroundColor, textColor;
-                    if (childCount < 10) {
-                        backgroundColor = '#4169E1'; // Royal Blue
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 25) {
-                        backgroundColor = '#6A5ACD'; // Slate Blue
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 50) {
-                        backgroundColor = '#8A2BE2'; // Blue Violet
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 100) {
-                        backgroundColor = '#9932CC'; // Dark Orchid
-                        textColor = '#FFFFFF';
-                    } else {
-                        backgroundColor = '#4B0082'; // Indigo (Dark Purple)
-                        textColor = '#FFFFFF';
-                    }
-
-                    // Calculate icon size based on viewer count
-                    let iconSize;
-                    if (childCount < 10) {
-                        iconSize = 30;
-                    } else if (childCount < 50) {
-                        iconSize = 35;
-                    } else if (childCount < 100) {
-                        iconSize = 40;
-                    } else {
-                        iconSize = 45;
-                    }
-
-                    return new L.DivIcon({
-                        html: `<div style="background-color: ${backgroundColor}; color: ${textColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: ${Math.max(10, iconSize * 0.3)}px; border: 2px solid rgba(255, 255, 255, 0.8); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);"><span>${childCount}</span></div>`,
-                        className: 'marker-cluster-custom',
-                        iconSize: new L.Point(iconSize, iconSize)
-                    });
-                }
-            });
-
-            this.markerClusterGroups.set(continent, clusterGroup);
-            this.map.addLayer(clusterGroup);
-        });
     }
 
     // Internal method to remove marker from visible map
