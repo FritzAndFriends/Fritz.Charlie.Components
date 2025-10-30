@@ -38,158 +38,259 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     private readonly Dictionary<(double lat, double lng), AggregateLocation> aggregatedMarkers = new();
     private readonly Dictionary<Guid, (double lat, double lng)> locationKeyIndex = new();
 
+    // NEW: Pin Announcement features
+    [Parameter] public bool EnablePinAnnouncements { get; set; } = true;
+    [Parameter] public int AnnouncementDurationMs { get; set; } = 5000;
+    [Parameter] public EventCallback<ViewerLocationEvent> OnPinAnnounced { get; set; }
+    
+    private readonly Queue<ViewerLocationEvent> announcementQueue = new();
+    private bool isAnnouncementActive = false;
+  private bool isUserNavigating = false;
+    private Timer? navigationDebounceTimer;
+    private ViewerLocationEvent? currentAnnouncedLocation;
+    private bool initialLoadComplete = false; // Track if initial load is done
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
-        {
-            try
-            {
-                ViewerLocationService.LocationPlotted += OnNewLocationFromService;
-                ViewerLocationService.LocationRemoved += OnLocationRemovedFromService;
+ {
+   try
+       {
+    ViewerLocationService.LocationPlotted += OnNewLocationFromService;
+    ViewerLocationService.LocationRemoved += OnLocationRemovedFromService;
 
-                mapModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
-                    "./_content/Fritz.Charlie.Components/chattermap.js");
+     mapModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import",
+     "./_content/Fritz.Charlie.Components/chattermap.js");
 
-                await mapModule.InvokeVoidAsync("initializeMap", mapElementId, Height, Width, 39.8283, -98.5795, (int)InitialZoom, MaxZoom);
-                mapInitialized = true;
+     await mapModule.InvokeVoidAsync("initializeMap", mapElementId, Height, Width, 39.8283, -98.5795, (int)InitialZoom, MaxZoom);
+ mapInitialized = true;
 
-                dotNetObjectRef = DotNetObjectReference.Create(this);
-                await mapModule.InvokeVoidAsync("setDotNetReference", dotNetObjectRef);
+          dotNetObjectRef = DotNetObjectReference.Create(this);
+      await mapModule.InvokeVoidAsync("setDotNetReference", dotNetObjectRef);
 
-                if (InitialLocations != null)
-                {
-                    await LoadMarkersAsync(InitialLocations);
-                }
-
-                await OnMapInitialized.InvokeAsync();
+          // Load InitialLocations parameter first (if any)
+    if (InitialLocations != null)
+    {
+       await LoadMarkersAsync(InitialLocations);
             }
-            catch (Exception ex)
-            {
-                await OnError.InvokeAsync($"Error initializing map: {ex.Message}");
+
+   // Call parent's initialization callback to load persisted/feature locations
+      // This happens BEFORE marking initial load complete to prevent announcements
+        await OnMapInitialized.InvokeAsync();
+
+     // NOW mark initial load as complete - any NEW markers after this point will trigger announcements
+           initialLoadComplete = true;
             }
+  catch (Exception ex)
+     {
+  await OnError.InvokeAsync($"Error initializing map: {ex.Message}");
+     }
         }
     }
 
-    private async Task PlotLocation(ViewerLocationEvent location)
+  private async Task PlotLocation(ViewerLocationEvent location)
     {
         if (!IsValidLocation(location) || !mapInitialized || mapModule == null) return;
 
         try
         {
-            // During tour, queue instead of immediate plot
+        // During tour, queue instead of immediate plot
             if (IsTourActive)
             {
-                PendingLocationQueue.Enqueue(location);
-                await InvokeAsync(StateHasChanged);
-                return;
-            }
+             PendingLocationQueue.Enqueue(location);
+     await InvokeAsync(StateHasChanged);
+      return;
+ }
 
-            // Check if this exact location ID is already plotted (prevent duplicates)
-            if (locationKeyIndex.ContainsKey(location.Id))
-            {
-                Console.WriteLine($"Skipping duplicate location {location.Id}");
-                return;
-            }
+    // Check if this exact location ID is already plotted (prevent duplicates)
+          if (locationKeyIndex.ContainsKey(location.Id))
+      {
+    Console.WriteLine($"Skipping duplicate location {location.Id}");
+  return;
+    }
 
-            // Aggregation key – 4 decimal places is ~11m resolution
+ // Aggregation key – 4 decimal places is ~11m resolution
             var key = (lat: Math.Round((double)location.Latitude, 4), lng: Math.Round((double)location.Longitude, 4));
+
+        bool isNewMarker = !aggregatedMarkers.ContainsKey(key);
 
             if (aggregatedMarkers.TryGetValue(key, out var aggregate))
             {
-                // Add to existing aggregate
+     // Add to existing aggregate
                 aggregate.Locations.Add(location);
-                locationKeyIndex[location.Id] = key;
+         locationKeyIndex[location.Id] = key;
 
-                // Update TourLocations with the new location
-                if (!TourLocations.ContainsKey(location.Id))
-                {
-                    TourLocations.Add(location.Id, location);
-                }
+       // Update TourLocations with the new location
+      if (!TourLocations.ContainsKey(location.Id))
+    {
+       TourLocations.Add(location.Id, location);
+    }
 
-                // Update marker (count + popup content)
-                var popupContent = BuildAggregatedPopupContent(aggregate);
-                await mapModule.InvokeVoidAsync("updateAggregatedMarker",
-                    aggregate.MarkerId,
-                    aggregate.Locations.Count,
-                    popupContent);
+            // Update marker (count + popup content)
+         var popupContent = BuildAggregatedPopupContent(aggregate);
+  await mapModule.InvokeVoidAsync("updateAggregatedMarker",
+    aggregate.MarkerId,
+          aggregate.Locations.Count,
+         popupContent);
 
-                await OnLocationPlotted.InvokeAsync(location);
-            }
-            else
+       await OnLocationPlotted.InvokeAsync(location);
+     }
+else
             {
-                // Create new marker
-                var markerId = location.Id.ToString();
-                var description = Truncate(location.LocationDescription, 100);
-                await mapModule.InvokeVoidAsync("addMarker",
-                    markerId,
-                    Math.Round((double)location.Latitude, 6),
-                    Math.Round((double)location.Longitude, 6),
-                    location.UserType,
-                    description,
-                    location.Service == "YouTube" ? "YouTube" : "Twitch",
-                    1); // initial count
+ // Create new marker
+          var markerId = location.Id.ToString();
+     var description = Truncate(location.LocationDescription, 100);
+     await mapModule.InvokeVoidAsync("addMarker",
+        markerId,
+           Math.Round((double)location.Latitude, 6),
+         Math.Round((double)location.Longitude, 6),
+         location.UserType,
+      description,
+            location.Service == "YouTube" ? "YouTube" : "Twitch",
+      1); // initial count
 
-                var newAggregate = new AggregateLocation(markerId, key.lat, key.lng);
-                newAggregate.Locations.Add(location);
+     var newAggregate = new AggregateLocation(markerId, key.lat, key.lng);
+ newAggregate.Locations.Add(location);
                 aggregatedMarkers[key] = newAggregate;
-                locationKeyIndex[location.Id] = key;
+        locationKeyIndex[location.Id] = key;
 
-                // Add to TourLocations
-                if (!TourLocations.ContainsKey(location.Id))
-                {
-                    TourLocations.Add(location.Id, location);
-                }
+    // Add to TourLocations
+    if (!TourLocations.ContainsKey(location.Id))
+   {
+     TourLocations.Add(location.Id, location);
+}
 
                 await OnLocationPlotted.InvokeAsync(location);
-            }
+   }
+
+    // NEW: Queue announcement for new markers if feature is enabled
+            if (EnablePinAnnouncements && isNewMarker)
+      {
+   QueuePinAnnouncement(location);
+      }
         }
-        catch (Exception ex)
+      catch (Exception ex)
         {
             Console.WriteLine($"ERROR plotting location {location.Id}: {ex.Message}");
+   }
+    }
+
+    // NEW: Queue a pin announcement
+    private void QueuePinAnnouncement(ViewerLocationEvent location)
+    {
+        // Don't queue if initial load hasn't completed yet
+        if (!initialLoadComplete)
+        {
+ Console.WriteLine($"Skipping announcement for {location.LocationDescription} (initial load not complete)");
+        return;
+        }
+
+        // Don't queue if tour is active or user is navigating
+        if (IsTourActive || isUserNavigating)
+        {
+            Console.WriteLine($"Skipping announcement for {location.LocationDescription} (tour active: {IsTourActive}, user navigating: {isUserNavigating})");
+ return;
+   }
+
+ announcementQueue.Enqueue(location);
+        Console.WriteLine($"Queued announcement for {location.LocationDescription}. Queue size: {announcementQueue.Count}");
+        
+        // Process queue if not already active
+        if (!isAnnouncementActive)
+        {
+            _ = ProcessAnnouncementQueueAsync();
         }
     }
 
-    private async Task RemoveLocation(Guid locationId)
+    // NEW: Process the announcement queue
+    private async Task ProcessAnnouncementQueueAsync()
     {
-        if (!mapInitialized || mapModule == null) return;
+        while (announcementQueue.Count > 0 && !IsTourActive && !isUserNavigating)
+   {
+       isAnnouncementActive = true;
+       var location = announcementQueue.Dequeue();
+    currentAnnouncedLocation = location;
+ 
+            Console.WriteLine($"Processing announcement for {location.LocationDescription}");
+            
+            try
+  {
+            await ShowPinAnnouncementAsync(location);
+                await OnPinAnnounced.InvokeAsync(location);
+            }
+   catch (Exception ex)
+    {
+     Console.WriteLine($"Error showing pin announcement: {ex.Message}");
+     }
+    
+            currentAnnouncedLocation = null;
+     await InvokeAsync(StateHasChanged);
+     
+   // Wait for announcement duration
+    await Task.Delay(AnnouncementDurationMs);
+  }
+        
+        isAnnouncementActive = false;
+    }
 
-        // Remove from TourLocations for tour purposes
-        TourLocations.Remove(locationId);
-
-        // Aggregation removal
-        if (locationKeyIndex.TryGetValue(locationId, out var key) &&
-            aggregatedMarkers.TryGetValue(key, out var aggregate))
+    // NEW: Show pin announcement with celebration
+    private async Task ShowPinAnnouncementAsync(ViewerLocationEvent location)
+    {
+        if (mapModule == null) return;
+        
+        try
         {
-            var idx = aggregate.Locations.FindIndex(l => l.Id == locationId);
-            if (idx >= 0)
-            {
-                aggregate.Locations.RemoveAt(idx);
-            }
-            locationKeyIndex.Remove(locationId);
-
-            if (aggregate.Locations.Count == 0)
-            {
-                // Remove marker completely
-                await mapModule.InvokeVoidAsync("removeMarker", aggregate.MarkerId);
-                aggregatedMarkers.Remove(key);
-            }
-            else
-            {
-                // Update existing aggregated marker with new count
-                var popupContent = BuildAggregatedPopupContent(aggregate);
-                await mapModule.InvokeVoidAsync("updateAggregatedMarker",
-                    aggregate.MarkerId,
-                    aggregate.Locations.Count,
-                    popupContent);
-            }
+ await mapModule.InvokeVoidAsync("showPinCelebration",
+   Math.Round((double)location.Latitude, 6),
+                Math.Round((double)location.Longitude, 6),
+        location.LocationDescription,
+location.Service,
+       location.UserType,
+                AnnouncementDurationMs);
+         
+    Console.WriteLine($"Showing celebration for {location.LocationDescription}");
         }
-        else
+ catch (Exception ex)
         {
-            // Fallback if not found in aggregation (legacy or mismatch)
-            await mapModule.InvokeVoidAsync("removeMarker", locationId.ToString());
-        }
+     Console.WriteLine($"Error in ShowPinAnnouncementAsync: {ex.Message}");
+     }
+    }
 
-        await OnLocationRemoved.InvokeAsync(locationId);
+    // NEW: Handle user navigation detection from JavaScript
+    [JSInvokable]
+    public Task OnUserNavigationStart()
+{
+        isUserNavigating = true;
+    Console.WriteLine("User navigation started - pausing announcements");
+   
+        // Reset debounce timer
+      navigationDebounceTimer?.Dispose();
+        navigationDebounceTimer = null;
+        
+   return Task.CompletedTask;
+    }
+
+  // NEW: Handle user navigation end with debounce
+    [JSInvokable]
+    public Task OnUserNavigationEnd()
+    {
+        Console.WriteLine("User navigation ended - debouncing...");
+        
+      // Debounce navigation end to avoid rapid start/stop
+        navigationDebounceTimer?.Dispose();
+        navigationDebounceTimer = new Timer(_ =>
+        {
+       isUserNavigating = false;
+   Console.WriteLine("User navigation debounce complete - resuming announcements");
+            
+    // Resume announcement queue processing if there are pending announcements
+  if (announcementQueue.Count > 0 && !isAnnouncementActive && !IsTourActive)
+       {
+                _ = ProcessAnnouncementQueueAsync();
+ }
+        }, null, 2000, Timeout.Infinite); // 2 second debounce
+    
+return Task.CompletedTask;
     }
 
     private async Task StartMapTour()
@@ -198,13 +299,18 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
         try
         {
-            var locationsList = TourLocations.Values.ToList();
+            // Clear announcement queue when tour starts
+            announcementQueue.Clear();
+   isAnnouncementActive = false;
+       currentAnnouncedLocation = null;
+          
+      var locationsList = TourLocations.Values.ToList();
             if (locationsList.Count > 200)
-            {
-                locationsList = locationsList.Take(200).ToList();
-            }
+         {
+         locationsList = locationsList.Take(200).ToList();
+        }
 
-            tourClusters = GenerateClusters(locationsList, forTour: true);
+      tourClusters = GenerateClusters(locationsList, forTour: true);
             
             // Log clustering results
          Console.WriteLine($"Generated {tourClusters.Count} clusters from {locationsList.Count} locations");
@@ -250,9 +356,9 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
         catch (Exception ex)
         {
-       Console.WriteLine($"ERROR starting tour: {ex.Message}");
-    IsTourActive = false;
-          CurrentTourLocation = null;
+ Console.WriteLine($"ERROR starting tour: {ex.Message}");
+       IsTourActive = false;
+            CurrentTourLocation = null;
             StateHasChanged();
         }
     }
@@ -261,11 +367,18 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     {
         if (!mapInitialized || mapModule == null) return;
 
-        IsTourActive = false;
+      IsTourActive = false;
         CurrentTourLocation = null;
-        await mapModule.InvokeVoidAsync("stopTour");
+  await mapModule.InvokeVoidAsync("stopTour");
         await ProcessPendingLocations();
-        StateHasChanged();
+     
+        // Resume announcement processing if queue has items
+    if (announcementQueue.Count > 0 && !isAnnouncementActive && !isUserNavigating)
+        {
+ _ = ProcessAnnouncementQueueAsync();
+        }
+        
+  StateHasChanged();
     }
 
     private async Task ProcessPendingLocations()
@@ -831,14 +944,14 @@ else if (avgDistance < 50)
     private async void OnNewLocationFromService(object? sender, ViewerLocationEvent viewerEvent)
     {
         var location = viewerEvent.ForDisplay();
-        if (IsTourActive)
+     if (IsTourActive)
         {
-            PendingLocationQueue.Enqueue(location);
-            await InvokeAsync(StateHasChanged);
-            return;
+   PendingLocationQueue.Enqueue(location);
+       await InvokeAsync(StateHasChanged);
+      return;
         }
         await PlotLocation(location);
-        await InvokeAsync(StateHasChanged);
+     await InvokeAsync(StateHasChanged);
     }
 
     private async void OnLocationRemovedFromService(object? sender, Guid locationId)
@@ -846,26 +959,69 @@ else if (avgDistance < 50)
         if (IsTourActive)
         {
             TourLocations.Remove(locationId);
-            var tempQueue = new Queue<ViewerLocationEvent>();
-            while (PendingLocationQueue.TryDequeue(out var queuedLocation))
+   var tempQueue = new Queue<ViewerLocationEvent>();
+  while (PendingLocationQueue.TryDequeue(out var queuedLocation))
             {
-                if (queuedLocation.Id != locationId)
-                    tempQueue.Enqueue(queuedLocation);
-            }
-            while (tempQueue.TryDequeue(out var q))
-            {
-                PendingLocationQueue.Enqueue(q);
-            }
-            await InvokeAsync(StateHasChanged);
-            return;
+          if (queuedLocation.Id != locationId)
+      tempQueue.Enqueue(queuedLocation);
+       }
+    while (tempQueue.TryDequeue(out var q))
+        {
+  PendingLocationQueue.Enqueue(q);
         }
+            await InvokeAsync(StateHasChanged);
+return;
+  }
 
         await RemoveLocation(locationId);
-        await InvokeAsync(StateHasChanged);
+    await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RemoveLocation(Guid locationId)
+    {
+        if (!mapInitialized || mapModule == null) return;
+
+        // Remove from TourLocations for tour purposes
+   TourLocations.Remove(locationId);
+
+        // Aggregation removal
+ if (locationKeyIndex.TryGetValue(locationId, out var key) &&
+            aggregatedMarkers.TryGetValue(key, out var aggregate))
+        {
+    var idx = aggregate.Locations.FindIndex(l => l.Id == locationId);
+      if (idx >= 0)
+            {
+    aggregate.Locations.RemoveAt(idx);
+       }
+            locationKeyIndex.Remove(locationId);
+
+     if (aggregate.Locations.Count == 0)
+            {
+    // Remove marker completely
+await mapModule.InvokeVoidAsync("removeMarker", aggregate.MarkerId);
+                aggregatedMarkers.Remove(key);
+            }
+    else
+    {
+ // Update existing aggregated marker with new count
+            var popupContent = BuildAggregatedPopupContent(aggregate);
+        await mapModule.InvokeVoidAsync("updateAggregatedMarker",
+          aggregate.MarkerId,
+         aggregate.Locations.Count,
+  popupContent);
+            }
+        }
+        else
+        {
+  // Fallback if not found in aggregation (legacy or mismatch)
+  await mapModule.InvokeVoidAsync("removeMarker", locationId.ToString());
+   }
+
+        await OnLocationRemoved.InvokeAsync(locationId);
     }
 
     private string BuildAggregatedPopupContent(AggregateLocation aggregate)
-    {
+{
         var count = aggregate.Locations.Count;
         // Show up to 5 distinct (service + userType) samples
         var serviceSummary = aggregate.Locations
@@ -891,29 +1047,33 @@ else if (avgDistance < 50)
 
     public async ValueTask DisposeAsync()
     {
-        try
+     try
         {
-            ViewerLocationService.LocationPlotted -= OnNewLocationFromService;
-            ViewerLocationService.LocationRemoved -= OnLocationRemovedFromService;
+     ViewerLocationService.LocationPlotted -= OnNewLocationFromService;
+      ViewerLocationService.LocationRemoved -= OnLocationRemovedFromService;
 
-            dotNetObjectRef?.Dispose();
-            dotNetObjectRef = null;
+  navigationDebounceTimer?.Dispose();
+            navigationDebounceTimer = null;
 
-            if (mapModule != null)
+      dotNetObjectRef?.Dispose();
+   dotNetObjectRef = null;
+
+   if (mapModule != null)
             {
-                try { await mapModule.InvokeVoidAsync("dispose"); } catch { }
-                try { await mapModule.DisposeAsync(); } catch { }
-            }
+  try { await mapModule.InvokeVoidAsync("dispose"); } catch { }
+        try { await mapModule.DisposeAsync(); } catch { }
+          }
 
-            TourLocations.Clear();
+       TourLocations.Clear();
             PendingLocationQueue.Clear();
-            tourClusters.Clear();
-            aggregatedMarkers.Clear();
+   tourClusters.Clear();
+          aggregatedMarkers.Clear();
             locationKeyIndex.Clear();
-        }
-        catch (Exception ex)
+        announcementQueue.Clear();
+     }
+  catch (Exception ex)
         {
-            Console.WriteLine($"WARNING: Error during component disposal: {ex.Message}");
+        Console.WriteLine($"WARNING: Error during component disposal: {ex.Message}");
         }
     }
 

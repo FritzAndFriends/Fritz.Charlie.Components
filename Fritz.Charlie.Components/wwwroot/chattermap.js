@@ -17,6 +17,11 @@ class ChatterMapManager {
         this.dotNetObjectRef = null; // Reference to C# component for callbacks
         this.viewportUpdateThrottle = null;
         this.maxMarkersPerView = 1000; // Limit visible markers per viewport
+
+        // NEW: Pin celebration state
+        this.celebrationActive = false;
+        this.celebrationTimeout = null;
+        this.userNavigationTimeout = null;
     }
 
     // Initialize the map with the specific element ID, dimensions, and configurable max zoom
@@ -64,6 +69,7 @@ class ChatterMapManager {
             // Add event listeners for better UX and viewport management
             this.map.on('zoomstart', () => {
                 console.log('Map zoom started');
+                this.notifyUserNavigationStart();
             });
 
             this.map.on('zoomend', () => {
@@ -77,6 +83,8 @@ class ChatterMapManager {
 
                 // Update visible markers based on new viewport
                 this.updateVisibleMarkers();
+
+                this.notifyUserNavigationEnd();
             });
 
             // Add drag event listener to stop tour on manual pan and update viewport
@@ -85,11 +93,13 @@ class ChatterMapManager {
                     console.log('User started dragging during tour - stopping tour');
                     this.stopTour();
                 }
+                this.notifyUserNavigationStart();
             });
 
             this.map.on('dragend', () => {
                 // Throttle viewport updates during dragging
                 this.throttleViewportUpdate();
+                this.notifyUserNavigationEnd();
             });
 
             this.map.on('moveend', () => {
@@ -222,87 +232,85 @@ class ChatterMapManager {
 
     // Initialize continent-specific cluster groups to prevent cross-ocean clustering
     initializeClusterGroups() {
-        const continents = ['NAM', 'SAM', 'EUR', 'AFR', 'ASI', 'SEA', 'OCE', 'ANT', 'OCN'];
+        // Use a single global cluster group instead of per-continent groups
+        const clusterGroup = L.markerClusterGroup({
+            maxClusterRadius: (zoom) => {
+                const maxZoom = this.getMaxZoom();
+                return 30;
+            },
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            animate: true,
+            animateAddingMarkers: false, // Disable for better performance with many markers
+            disableClusteringAtZoom: Math.min(this.getMaxZoom() + 1, 7), // Disable clustering at max zoom + 1
+            maxClusterSize: 100, // Limit cluster size for performance
+            iconCreateFunction: (cluster) => {
+                // Calculate total viewer count from all markers in cluster
+                const markers = cluster.getAllChildMarkers();
+                let totalViewers = 0;
 
-        continents.forEach(continent => {
-            const clusterGroup = L.markerClusterGroup({
-                maxClusterRadius: (zoom) => {
-                    const maxZoom = this.getMaxZoom();
-                    return 30;
-                },
-                spiderfyOnMaxZoom: true,
-                showCoverageOnHover: false,
-                zoomToBoundsOnClick: true,
-                animate: true,
-                animateAddingMarkers: false, // Disable for better performance with many markers
-                disableClusteringAtZoom: Math.min(this.getMaxZoom() + 1, 7), // Disable clustering at max zoom + 1
-                maxClusterSize: 100, // Limit cluster size for performance
-                iconCreateFunction: (cluster) => {
-                    // Calculate total viewer count from all markers in cluster
-                    const markers = cluster.getAllChildMarkers();
-                    let totalViewers = 0;
-
-                    // OPTIMIZED: Use reverse lookup Map for O(1) performance instead of nested loop
-                    markers.forEach(marker => {
-                        const markerId = this.markerToIdMap.get(marker);
-                        if (markerId) {
-                            const markerData = this.allMarkerData.get(markerId);
-                            const viewerCount = markerData?.count || 1;
-                            totalViewers += viewerCount;
-                        } else {
-                            // Fallback if marker data not found
-                            totalViewers += 1;
-                            console.warn('Cluster: Marker not found in reverse lookup, counting as 1');
-                        }
-                    });
-
-                    console.log(`Cluster created with ${markers.length} location markers representing ${totalViewers} total viewers`);
-
-                    // Use totalViewers instead of childCount for display
-                    const childCount = totalViewers;
-
-                    // Define royal blue to dark purple gradient colors based on viewer count
-                    let backgroundColor, textColor;
-                    if (childCount < 10) {
-                        backgroundColor = '#4169E1'; // Royal Blue
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 25) {
-                        backgroundColor = '#6A5ACD'; // Slate Blue
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 50) {
-                        backgroundColor = '#8A2BE2'; // Blue Violet
-                        textColor = '#FFFFFF';
-                    } else if (childCount < 100) {
-                        backgroundColor = '#9932CC'; // Dark Orchid
-                        textColor = '#FFFFFF';
+                // OPTIMIZED: Use reverse lookup Map for O(1) performance instead of nested loop
+                markers.forEach(marker => {
+                    const markerId = this.markerToIdMap.get(marker);
+                    if (markerId) {
+                        const markerData = this.allMarkerData.get(markerId);
+                        const viewerCount = markerData?.count || 1;
+                        totalViewers += viewerCount;
                     } else {
-                        backgroundColor = '#4B0082'; // Indigo (Dark Purple)
-                        textColor = '#FFFFFF';
+                        // Fallback if marker data not found
+                        totalViewers += 1;
+                        console.warn('Cluster: Marker not found in reverse lookup, counting as 1');
                     }
+                });
 
-                    // Calculate icon size based on viewer count
-                    let iconSize;
-                    if (childCount < 10) {
-                        iconSize = 30;
-                    } else if (childCount < 50) {
-                        iconSize = 35;
-                    } else if (childCount < 100) {
-                        iconSize = 40;
-                    } else {
-                        iconSize = 45;
-                    }
+                console.log(`Cluster created with ${markers.length} location markers representing ${totalViewers} total viewers`);
 
-                    return new L.DivIcon({
-                        html: `<div style="background-color: ${backgroundColor}; color: ${textColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: ${Math.max(10, iconSize * 0.3)}px; border: 2px solid rgba(255, 255, 255, 0.8); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);"><span>${childCount}</span></div>`,
-                        className: 'marker-cluster-custom',
-                        iconSize: new L.Point(iconSize, iconSize)
-                    });
+                // Use totalViewers instead of childCount for display
+                const childCount = totalViewers;
+
+                // Define royal blue to dark purple gradient colors based on viewer count
+                let backgroundColor, textColor;
+                if (childCount < 10) {
+                    backgroundColor = '#4169E1'; // Royal Blue
+                    textColor = '#FFFFFF';
+                } else if (childCount < 25) {
+                    backgroundColor = '#6A5ACD'; // Slate Blue
+                    textColor = '#FFFFFF';
+                } else if (childCount < 50) {
+                    backgroundColor = '#8A2BE2'; // Blue Violet
+                    textColor = '#FFFFFF';
+                } else if (childCount < 100) {
+                    backgroundColor = '#9932CC'; // Dark Orchid
+                    textColor = '#FFFFFF';
+                } else {
+                    backgroundColor = '#4B0082'; // Indigo (Dark Purple)
+                    textColor = '#FFFFFF';
                 }
-            });
 
-            this.markerClusterGroups.set(continent, clusterGroup);
-            this.map.addLayer(clusterGroup);
+                // Calculate icon size based on viewer count
+                let iconSize;
+                if (childCount < 10) {
+                    iconSize = 30;
+                } else if (childCount < 50) {
+                    iconSize = 35;
+                } else if (childCount < 100) {
+                    iconSize = 40;
+                } else {
+                    iconSize = 45;
+                }
+
+                return new L.DivIcon({
+                    html: `<div style="background-color: ${backgroundColor}; color: ${textColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: ${Math.max(10, iconSize * 0.3)}px; border: 2px solid rgba(255, 255, 255, 0.8); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);"><span>${childCount}</span></div>`,
+                    className: 'marker-cluster-custom',
+                    iconSize: new L.Point(iconSize, iconSize)
+                });
+            }
         });
+
+        // Add single global cluster group
+        this.markerClusterGroups.set('GLO', clusterGroup);
+        this.map.addLayer(clusterGroup);
     }
 
     // Add a marker to the map with count support (modified to support aggregation)
@@ -322,7 +330,7 @@ class ChatterMapManager {
             // Store marker data without immediately adding to map
             const markerData = {
                 lat, lng, userType, description, service, count,
-                continentCode: this.getContinentCode(lat, lng)
+                continentCode: 'GLO' // Use global cluster group for all markers
             };
 
             this.allMarkerData.set(id, markerData);
@@ -333,7 +341,7 @@ class ChatterMapManager {
                 this.visibleMarkers.add(id);
             }
 
-            console.log(`Stored marker ${id} at ${lat}, ${lng} for ${userType} (${service}) with count ${count} in continent ${markerData.continentCode}`);
+            console.log(`Stored marker ${id} at ${lat}, ${lng} for ${userType} (${service}) with count ${count}`);
             return true;
         } catch (error) {
             console.error(`Error adding marker ${id}:`, error);
@@ -404,12 +412,12 @@ class ChatterMapManager {
         const popupContent = `
             <div style="font-family: 'Segoe UI', sans-serif; max-width: 200px;">
          <div style="font-weight: bold; color: #495057; margin-bottom: 8px; font-size: 1.1em;">${description}</div>
-                ${count > 1 ? `<div style="margin-bottom: 4px;"><strong>Viewers:</strong> <span style="color: #dc3545;">${count}</span></div>` : ''}
-       <div style="margin-bottom: 4px;"><strong>Type:</strong> <span style="color: #6c757d;">${userType}</span></div>
+   ${count > 1 ? `<div style="margin-bottom: 4px;"><strong>Viewers:</strong> <span style="color: #dc3545;">${count}</span></div>` : ''}
+   <div style="margin-bottom: 4px;"><strong>Type:</strong> <span style="color: #6c757d;">${userType}</span></div>
     <div style="margin-bottom: 4px;"><strong>Service:</strong> <span style="color: #007bff;">${service}</span></div>
       <div style="font-size: 0.85em; color: #868e96;">
        <strong>Coordinates:</strong><br>
-       ${lat.toFixed(4)}, ${lng.toFixed(4)}<br>
+    ${lat.toFixed(4)}, ${lng.toFixed(4)}<br>
         <strong>Continent:</strong> ${continentCode}
      </div>
       </div>
@@ -420,14 +428,86 @@ class ChatterMapManager {
             className: 'custom-popup'
         });
 
-        // Store marker reference with continent info
+     // Store marker reference with continent info
         this.markers.set(id, { marker, continentCode });
 
         // Maintain reverse lookup for O(1) cluster aggregation
         this.markerToIdMap.set(marker, id);
 
         // Add to appropriate continent cluster group
-        clusterGroup.addLayer(marker);
+      clusterGroup.addLayer(marker);
+    }
+
+    // Create marker icon with optional count badge
+    createMarkerIcon(iconUrl, count, userType) {
+        if (count <= 1) {
+     // Standard icon without badge
+       return L.icon({
+    iconUrl: iconUrl,
+      iconSize: [20, 20],
+        iconAnchor: [10, 10],
+    popupAnchor: [0, -10],
+                className: `marker-${userType.toLowerCase()}`
+ });
+        } else {
+    // Create custom icon with count badge
+    const html = `
+              <div style="position: relative; width: 24px; height: 24px;">
+         <img src="${iconUrl}" style="width: 20px; height: 20px;" />
+      <div style="
+      position: absolute;
+            top: -8px;
+        right: -8px;
+         background: #dc3545;
+      color: white;
+border-radius: 50%;
+ width: 18px;
+           height: 18px;
+                    display: flex;
+    align-items: center;
+justify-content: center;
+              font-size: 10px;
+    font-weight: bold;
+   border: 2px solid white;
+   box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+   ">${count}</div>
+              </div>
+   `;
+
+            return L.divIcon({
+         html: html,
+   iconSize: [24, 24],
+              iconAnchor: [12, 12],
+                popupAnchor: [0, -12],
+       className: `marker-${userType.toLowerCase()}-aggregated`
+    });
+        }
+    }
+
+    // Get icon URL from C# component or use default
+    async getIconUrl(userType, service) {
+    // Try to get icon URL from C# callback first
+     if (this.dotNetObjectRef) {
+     try {
+        const iconUrl = await this.dotNetObjectRef.invokeMethodAsync('GetIconUrl', userType, service);
+         if (iconUrl) {
+     console.log(`Got icon URL from C#: ${iconUrl} for ${userType}/${service}`);
+          return iconUrl;
+      } else {
+                return this.getDefaultIconUrl(userType, service);
+   }
+       } catch (error) {
+            console.warn('Failed to get icon URL from C#, using JavaScript fallback:', error);
+   }
+        }
+
+        // Fallback to JavaScript-side defaults if C# callback fails or returns null
+        return this.getDefaultIconUrl(userType, service);
+    }
+
+    // Default icon URL logic (fallback when C# doesn't provide custom icons)
+    getDefaultIconUrl(userType, service) {
+        return "/_content/Fritz.Charlie.Components/img/pin.webp";
     }
 
     // Update an existing aggregated marker with new count and popup content
@@ -483,417 +563,236 @@ class ChatterMapManager {
         }
     }
 
-    // Get maximum visible markers based on zoom level (adjusted for higher zoom levels)
-    getMaxVisibleMarkers(zoom) {
-        const maxZoom = this.getMaxZoom();
-
-        // Adjust thresholds based on actual max zoom level
-        switch (true) {
-            case zoom <= 2: return 50;   // World view - very few markers
-            case zoom <= 3: return 150;  // Continental view
-            case zoom <= 4: return 300;  // Regional view
-            case zoom <= Math.min(5, maxZoom - 1): return 600;  // City view
-            default: return 1000;        // Detailed view - more markers
-        }
-    }
-
-    // Get user type priority for marker visibility
-    getUserTypePriority(userType) {
-        switch (userType?.toLowerCase()) {
-            case 'broadcaster': return 4;
-            case 'moderator': return 3;
-            case 'subscriber':
-            case 'vip': return 2;
-            default: return 1;
-        }
-    }
-
-    // Internal method to remove marker from visible map
-    removeMarkerFromMap(id) {
-        const markerInfo = this.markers.get(id);
-        if (markerInfo) {
-            const { marker, continentCode } = markerInfo;
-            const clusterGroup = this.markerClusterGroups.get(continentCode);
-
-            if (clusterGroup) {
-                clusterGroup.removeLayer(marker);
-                this.markers.delete(id);
-
-                // Clean up reverse lookup
-                this.markerToIdMap.delete(marker);
-
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Remove a marker from the map (modified to support viewport optimization and aggregation)
-    removeMarker(id) {
-        // Remove from data store
-        this.allMarkerData.delete(id);
-
-        // Remove from visible markers if it's currently visible
-        if (this.visibleMarkers.has(id)) {
-            this.removeMarkerFromMap(id);
-            this.visibleMarkers.delete(id);
-        }
-
-        console.log(`Removed marker ${id}`);
-        return true;
-    }
-
-    // Clear all markers
-    clearMarkers() {
-        if (this.markerClusterGroups.size > 0) {
-            this.markerClusterGroups.forEach(clusterGroup => {
-                clusterGroup.clearLayers();
-            });
-            this.markers.clear();
-            this.allMarkerData.clear();
-            this.visibleMarkers.clear();
-
-            // Clear reverse lookup
-            this.markerToIdMap.clear();
-
-            console.log('Cleared all markers from all continents');
-        }
-    }
-
-    // Create a marker icon with optional count badge
-    createMarkerIcon(iconUrl, count, userType) {
-        if (count <= 1) {
-            // Standard icon without badge
-            return L.icon({
-                iconUrl: iconUrl,
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
-                popupAnchor: [0, -10],
-                className: `marker-${userType.toLowerCase()}`
-            });
-        } else {
-            // Create custom icon with count badge
-            const html = `
-      <div style="position: relative; width: 24px; height: 24px;">
-    <img src="${iconUrl}" style="width: 20px; height: 20px;" />
-            <div style="
-         position: absolute;
-          top: -8px;
-        right: -8px;
-           background: #dc3545;
-       color: white;
-   border-radius: 50%;
-      width: 18px;
- height: 18px;
-        display: flex;
-      align-items: center;
-             justify-content: center;
-      font-size: 10px;
-  font-weight: bold;
-            border: 2px solid white;
-   box-shadow: 0 2px 4px rgba(0,0,0,0.3);
- ">${count}</div>
-                </div>
-            `;
-
-            return L.divIcon({
-                html: html,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12],
-                popupAnchor: [0, -12],
-                className: `marker-${userType.toLowerCase()}-aggregated`
-            });
-        }
-    }
-
-    async getIconUrl(userType, service) {
-        // Try to get icon URL from C# callback first
-        if (this.dotNetObjectRef) {
-            try {
-                const iconUrl = await this.dotNetObjectRef.invokeMethodAsync('GetIconUrl', userType, service);
-                if (iconUrl) {
-                    console.log(`Got icon URL from C#: ${iconUrl} for ${userType}/${service}`);
-                    return iconUrl;
-                } else {
-                    return getDefaultIconUrl(userType, service);
-                }
-            } catch (error) {
-                console.warn('Failed to get icon URL from C#, using JavaScript fallback:', error);
-            }
-        }
-
-        // Fallback to JavaScript-side defaults if C# callback fails or returns null
-        return this.getDefaultIconUrl(userType, service);
-    }
-
-    // Default icon URL logic (fallback when C# doesn't provide custom icons)
-    getDefaultIconUrl(userType, service) {
-
-        return "/_content/Fritz.Charlie.Components/img/pin.webp";
-
-    }
-
-    // Get continent code to prevent cross-ocean clustering
-    getContinentCode(latitude, longitude) {
-        // Return continent codes matching the C# implementation
-
-        // North America (including Central America and Caribbean)
-        if (latitude >= 5 && longitude >= -180 && longitude <= -30) {
-            return "NAM";
-        }
-
-        // South America
-        if (latitude >= -60 && latitude < 15 && longitude >= -90 && longitude <= -30) {
-            return "SAM";
-        }
-
-        // Europe (including European Russia west of Urals)
-        if (latitude >= 35 && longitude >= -10 && longitude <= 60) {
-            return "EUR";
-        }
-
-        // Africa
-        if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55) {
-            return "AFR";
-        }
-
-        // Asia (including Asian Russia east of Urals)
-        if (latitude >= 0 && longitude >= 60 && longitude <= 180) {
-            return "ASI";
-        }
-
-        // Southeast Asia and Indonesia (special case to separate from mainland Asia)
-        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150) {
-            return "SEA";
-        }
-
-        // Australia and Oceania
-        if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180) {
-            return "OCE";
-        }
-
-        // Antarctica
-        if (latitude < -60) {
-            return "ANT";
-        }
-
-        // Default to ocean/unknown - these won't cluster with anything
-        return "OCN";
-    }
-
-    // Start tour with enhanced navigation
-    startTour(tourStops) {
-        if (!this.map || !tourStops || tourStops.length === 0) {
-            console.error('Cannot start tour: invalid parameters');
+    // Show pin celebration with animation and modal
+    async showPinCelebration(lat, lng, description, service, userType, duration) {
+        if (!this.map || this.tourActive || this.celebrationActive) {
+            console.log('Skipping celebration - tour active or celebration in progress');
             return;
         }
 
-        console.log(`Starting tour with ${tourStops.length} stops`);
-        this.tourActive = true;
-        this.tourStops = tourStops;
-        this.currentTourIndex = 0;
+        this.celebrationActive = true;
+        console.log(`Showing celebration for ${description} at ${lat}, ${lng}`);
 
-        // Notify C# component that tour has started
-        this.notifyTourStatusChanged();
+        try {
+            // Create confetti/fireworks effect at the location
+            this.createCelebrationEffect(lat, lng);
 
-        // Create bottom overlay for region descriptions
-        this.createRegionOverlay();
-
-        // Start the tour immediately with the first location
-        this.continueTour();
-    }
-
-    // Create bottom overlay for region descriptions
-    createRegionOverlay() {
-        // Remove existing overlay if present
-        this.removeRegionOverlay();
-
-        // Create overlay container
-        const overlay = document.createElement('div');
-        overlay.id = `${this.elementId}-region-overlay`;
-        overlay.className = 'region-overlay';
-        overlay.style.cssText = `
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            right: 20px;
-            background: linear-gradient(135deg, rgba(0, 123, 255, 0.95) 0%, rgba(102, 16, 242, 0.95) 100%);
-            color: white;
-            padding: 15px 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            backdrop-filter: blur(10px);
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            font-family: 'Segoe UI', sans-serif;
-            text-align: center;
-            font-weight: 600;
-            font-size: 16px;
-            z-index: 1000;
-            opacity: 0;
-            transform: translateY(20px);
-            transition: all 0.3s ease;
-            pointer-events: none;
-        `;
-
-        // Add to map container
-        const mapElement = document.getElementById(this.elementId);
-        mapElement.style.position = 'relative';
-        mapElement.appendChild(overlay);
-
-        // Animate in
-        setTimeout(() => {
-            overlay.style.opacity = '1';
-            overlay.style.transform = 'translateY(0)';
-        }, 100);
-    }
-
-    // Update region overlay content
-    updateRegionOverlay(description, locationCount) {
-        const overlay = document.getElementById(`${this.elementId}-region-overlay`);
-        if (overlay) {
-            overlay.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
-                    <span style="font-size: 24px;">🎯</span>
-                    <div style="text-align: left;">
-                        <div style="font-size: 18px; font-weight: 700; margin-bottom: 2px;">${description}</div>
-                        <div style="font-size: 14px; opacity: 0.9;">${locationCount} viewer(s) in this region</div>
-                    </div>
-                </div>
-            `;
-        }
-    }
-
-    // Remove region overlay
-    removeRegionOverlay() {
-        const overlay = document.getElementById(`${this.elementId}-region-overlay`);
-        if (overlay) {
-            overlay.style.opacity = '0';
-            overlay.style.transform = 'translateY(20px)';
-            setTimeout(() => {
-                overlay.remove();
-            }, 300);
-        }
-    }
-
-    // Continue tour to next location
-    continueTour() {
-        if (!this.tourActive || this.currentTourIndex >= this.tourStops.length) {
-            console.log('Tour completed - reached end of stops');
-            this.stopTour();
-            return;
-        }
-
-        // Safety check - if user has manually zoomed out, stop the tour
-        if (this.map && this.map.getZoom() <= 2 && this.currentTourIndex > 0) {
-            console.log('Tour stopped due to zoom level');
-            this.stopTour();
-            return;
-        }
-
-        const stop = this.tourStops[this.currentTourIndex];
-        console.log(`Tour stop ${this.currentTourIndex + 1}/${this.tourStops.length}: ${stop.description}`);
-
-        // Update region overlay with current stop info
-        this.updateRegionOverlay(stop.description, stop.locationCount || stop.locations?.length || 0);
-
-        // Fly to the tour stop with appropriate zoom (respecting max zoom)
-        const targetZoom = Math.min(stop.zoom || 4, this.getMaxZoom());
-        this.map.flyTo([stop.lat, stop.lng], targetZoom, {
-            animate: true,
-            duration: 2.5,
-            easeLinearity: 0.25
-        });
-
-        this.currentTourIndex++;
-
-        // Notify C# component of tour progress
-        this.notifyTourStatusChanged();
-
-        // Schedule next tour stop with safety check
-        this.tourTimer = setTimeout(() => {
-            if (this.tourActive) { // Double-check tour is still active
-                this.continueTour();
-            }
-        }, 5000);
-    }
-
-    // Stop tour and return to world view over Atlantic Ocean
-    stopTour() {
-        if (!this.tourActive) {
-            console.log('Tour already stopped');
-            return; // Already stopped
-        }
-
-        console.log('Stopping tour and resetting state');
-        this.tourActive = false;
-        this.currentTourIndex = 0;
-        this.tourStops = []; // Clear tour stops to ensure clean state
-
-        if (this.tourTimer) {
-            clearTimeout(this.tourTimer);
-            this.tourTimer = null;
-        }
-
-        // Remove region overlay
-        this.removeRegionOverlay();
-
-        // Return to world view centered over the Atlantic Ocean with smooth animation
-        // Only if not already at world view
-        if (this.map && this.map.getZoom() > 2) {
-            this.map.flyTo([15, -30], 2, {
+            // Zoom to the location with animation
+            const targetZoom = Math.min(8, this.getMaxZoom()); // Close-up view
+            this.map.flyTo([lat, lng], targetZoom, {
                 animate: true,
-                duration: 3.0,
+                duration: 1.5,
                 easeLinearity: 0.25
             });
-        }
 
-        console.log('Tour stopped - state should now show inactive');
+            // Wait for zoom animation to complete
+            await this.sleep(1500);
 
-        // Notify C# component that tour has ended
-        this.notifyTourStatusChanged();
-    }
+            // Show modal overlay with location details
+            this.showLocationModal(description, service, userType, lat, lng);
 
-    // Notify C# component of tour status changes
-    notifyTourStatusChanged() {
-        if (this.dotNetObjectRef) {
-            try {
-                this.dotNetObjectRef.invokeMethodAsync('OnTourStatusChanged',
-                    this.tourActive,
-                    this.currentTourIndex,
-                    this.tourStops.length);
-                console.log(`Notified C# of tour status: active=${this.tourActive}, index=${this.currentTourIndex}, total=${this.tourStops.length}`);
-            } catch (error) {
-                console.error('Error notifying C# of tour status change:', error);
-            }
-        } else {
-            console.warn('No .NET object reference available for tour status notification');
+            // Auto-dismiss after duration
+            this.celebrationTimeout = setTimeout(() => {
+                this.dismissLocationModal();
+                this.celebrationActive = false;
+            }, duration);
+
+        } catch (error) {
+            console.error('Error in showPinCelebration:', error);
+            this.celebrationActive = false;
         }
     }
 
-    // Get current tour status
-    getTourStatus() {
-        const status = {
-            active: this.tourActive,
-            currentIndex: this.currentTourIndex,
-            totalLocations: this.tourStops.length
+    // Create visual celebration effect (confetti/fireworks)
+    createCelebrationEffect(lat, lng) {
+        const mapElement = document.getElementById(this.elementId);
+        const point = this.map.latLngToContainerPoint([lat, lng]);
+
+        // Create celebration container
+        const celebrationContainer = document.createElement('div');
+        celebrationContainer.className = 'pin-celebration-effect';
+        celebrationContainer.style.cssText = `
+  position: absolute;
+      left: ${point.x}px;
+    top: ${point.y}px;
+ width: 100px;
+    height: 100px;
+    margin-left: -50px;
+    margin-top: -50px;
+            pointer-events: none;
+            z-index: 2000;
+        `;
+
+        // Create multiple confetti particles
+        for (let i = 0; i < 20; i++) {
+            const confetti = document.createElement('div');
+            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f7b731', '#5f27cd', '#00d2d3'];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const angle = (Math.PI * 2 * i) / 20;
+            const velocity = 50 + Math.random() * 50;
+            const dx = Math.cos(angle) * velocity;
+            const dy = Math.sin(angle) * velocity;
+
+            confetti.style.cssText = `
+  position: absolute;
+   left: 50%;
+top: 50%;
+       width: 8px;
+      height: 8px;
+    background: ${color};
+                border-radius: 50%;
+                animation: confetti-burst 0.8s ease-out forwards;
+        --dx: ${dx}px;
+       --dy: ${dy}px;
+      `;
+
+            celebrationContainer.appendChild(confetti);
+        }
+
+        // Add pulsing ring effect
+        const ring = document.createElement('div');
+        ring.style.cssText = `
+            position: absolute;
+            left: 50%;
+            top: 50%;
+          width: 40px;
+  height: 40px;
+       margin-left: -20px;
+            margin-top: -20px;
+            border: 3px solid #ffd700;
+          border-radius: 50%;
+            animation: pulse-ring 0.8s ease-out forwards;
+  `;
+        celebrationContainer.appendChild(ring);
+
+        mapElement.appendChild(celebrationContainer);
+
+        // Remove after animation
+        setTimeout(() => {
+            celebrationContainer.remove();
+        }, 1000);
+    }
+
+    // Show modal with location details
+    showLocationModal(description, service, userType, lat, lng) {
+        // Remove existing modal if present
+        this.dismissLocationModal();
+
+        const mapElement = document.getElementById(this.elementId);
+        mapElement.style.position = 'relative';
+
+        const modal = document.createElement('div');
+        modal.id = `${this.elementId}-celebration-modal`;
+        modal.className = 'pin-celebration-modal';
+
+        // Service-specific styling
+        const serviceColor = service === 'YouTube' ? '#ff0000' : '#9146ff';
+        const serviceIcon = service === 'YouTube' ? '▶️' : '📺';
+
+        modal.innerHTML = `
+      <div class="celebration-modal-content">
+  <div class="celebration-header" style="border-left: 4px solid ${serviceColor};">
+              <div class="celebration-icon">🎉</div>
+                 <div class="celebration-title">New Viewer Location!</div>
+     </div>
+          <div class="celebration-body">
+     <div class="celebration-location">
+        <div class="location-icon">📍</div>
+        <div class="location-name">${description}</div>
+        </div>
+              <div class="celebration-details">
+            <div class="detail-item">
+   <span class="detail-icon">${serviceIcon}</span>
+    <span class="detail-text">${service}</span>
+           </div>
+       <div class="detail-item">
+             <span class="detail-icon">👤</span>
+          <span class="detail-text">${this.formatUserType(userType)}</span>
+     </div>
+       <div class="detail-item">
+  <span class="detail-icon">🌍</span>
+  <span class="detail-text">${lat.toFixed(2)}, ${lng.toFixed(2)}</span>
+         </div>
+             </div>
+       </div>
+       <div class="celebration-footer">
+      <button class="celebration-dismiss-btn" onclick="window.dismissCelebrationModal()">
+        Got it! ✓
+              </button>
+         </div>
+            </div>
+        `;
+
+        mapElement.appendChild(modal);
+
+     // Animate in
+        setTimeout(() => {
+            modal.classList.add('visible');
+    }, 50);
+
+        // Store reference for dismissal
+        window.dismissCelebrationModal = () => {
+     this.dismissLocationModal();
+            if (this.celebrationTimeout) {
+      clearTimeout(this.celebrationTimeout);
+         this.celebrationTimeout = null;
+         }
+ this.celebrationActive = false;
         };
-        return status;
+    }
+
+    // Dismiss location modal
+    dismissLocationModal() {
+   const modal = document.getElementById(`${this.elementId}-celebration-modal`);
+        if (modal) {
+            modal.classList.remove('visible');
+         setTimeout(() => {
+                modal.remove();
+            }, 300);
+        }
+ }
+
+    // Format user type for display
+    formatUserType(userType) {
+        const typeMap = {
+    'broadcaster': '🎙️ Broadcaster',
+            'moderator': '⚔️ Moderator',
+            'subscriber': '⭐ Subscriber',
+            'vip': '💎 VIP',
+     'user': '👥 Viewer'
+ };
+        return typeMap[userType?.toLowerCase()] || '👥 Viewer';
+    }
+
+    // Notify C# of user navigation start
+    notifyUserNavigationStart() {
+    if (this.dotNetObjectRef && !this.tourActive) {
+      clearTimeout(this.userNavigationTimeout);
+            this.dotNetObjectRef.invokeMethodAsync('OnUserNavigationStart')
+           .catch(err => console.warn('Failed to notify navigation start:', err));
+        }
+    }
+
+    // Notify C# of user navigation end (with debounce)
+    notifyUserNavigationEnd() {
+        if (this.dotNetObjectRef && !this.tourActive) {
+          clearTimeout(this.userNavigationTimeout);
+            this.userNavigationTimeout = setTimeout(() => {
+  this.dotNetObjectRef.invokeMethodAsync('OnUserNavigationEnd')
+                  .catch(err => console.warn('Failed to notify navigation end:', err));
+       }, 500);
+    }
+    }
+
+    // Sleep utility for async operations
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     // Set the .NET object reference for callbacks
     setDotNetReference(dotNetObjectRef) {
         this.dotNetObjectRef = dotNetObjectRef;
-        console.log('DotNet object reference set for tour status callbacks');
-    }
-
-    // Resize map (useful for responsive layouts)
-    invalidateSize() {
-        if (this.map) {
-            setTimeout(() => {
-                this.map.invalidateSize();
-                console.log('Map size invalidated');
-            }, 100);
-        }
+        console.log('DotNet object reference set for callbacks');
     }
 
     // Dispose of map resources
@@ -901,36 +800,50 @@ class ChatterMapManager {
         console.log('Disposing map resources');
 
         if (this.tourTimer) {
-            clearTimeout(this.tourTimer);
+     clearTimeout(this.tourTimer);
             this.tourTimer = null;
         }
 
-        if (this.viewportUpdateThrottle) {
-            clearTimeout(this.viewportUpdateThrottle);
-            this.viewportUpdateThrottle = null;
+        if (this.celebrationTimeout) {
+     clearTimeout(this.celebrationTimeout);
+            this.celebrationTimeout = null;
         }
+
+    if (this.userNavigationTimeout) {
+    clearTimeout(this.userNavigationTimeout);
+            this.userNavigationTimeout = null;
+        }
+
+        if (this.viewportUpdateThrottle) {
+     clearTimeout(this.viewportUpdateThrottle);
+    this.viewportUpdateThrottle = null;
+        }
+
+     this.dismissLocationModal();
 
         if (this.map) {
             this.map.remove();
             this.map = null;
-        }
+ }
 
         this.markers.clear();
         this.allMarkerData.clear();
-        this.visibleMarkers.clear();
+   this.visibleMarkers.clear();
         this.markerClusterGroups.clear();
 
         // Clear reverse lookup
         this.markerToIdMap.clear();
 
-        this.tourStops = [];
+      this.tourStops = [];
         this.tourActive = false;
         this.currentTourIndex = 0;
+    this.celebrationActive = false;
     }
 }
 
 // Component instance manager
 let mapInstance = null;
+let pendingDotNetRef = null; // Store DotNet reference if set before map initialization
 
 // Exported functions for .NET interop
 export function initializeMap(elementId, height, width, lat, lng, zoom, maxZoom = 6) {
@@ -941,7 +854,15 @@ export function initializeMap(elementId, height, width, lat, lng, zoom, maxZoom 
     }
 
     mapInstance = new ChatterMapManager();
-    return mapInstance.initializeMap(elementId, height, width, lat, lng, zoom, maxZoom);
+    const success = mapInstance.initializeMap(elementId, height, width, lat, lng, zoom, maxZoom);
+    
+    // If there was a pending DotNet reference, set it now
+    if (success && pendingDotNetRef) {
+        mapInstance.setDotNetReference(pendingDotNetRef);
+        pendingDotNetRef = null;
+    }
+    
+    return success;
 }
 
 export function addMarker(id, lat, lng, userType, description, service, count = 1) {
@@ -1026,7 +947,11 @@ export function getTourStatus() {
 
 export function setDotNetReference(dotNetObjectRef) {
     if (mapInstance) {
-        mapInstance.setDotNetReference(dotNetObjectRef);
+  mapInstance.setDotNetReference(dotNetObjectRef);
+    } else {
+ // Store reference to set later when map is initialized
+  pendingDotNetRef = dotNetObjectRef;
+        console.log('DotNet reference stored, will be set when map initializes');
     }
 }
 
@@ -1041,4 +966,13 @@ export function dispose() {
         mapInstance.dispose();
         mapInstance = null;
     }
+}
+
+// NEW: Export showPinCelebration function
+export function showPinCelebration(lat, lng, description, service, userType, duration) {
+    if (mapInstance) {
+        return mapInstance.showPinCelebration(lat, lng, description, service, userType, duration);
+    }
+    console.error('Map instance not initialized');
+    return Promise.resolve();
 }

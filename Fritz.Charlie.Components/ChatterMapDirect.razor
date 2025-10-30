@@ -42,13 +42,25 @@
                 <span class="tour-pending">📍 @PendingLocationQueue.Count location(s) queued</span>
             }
         }
+        
+        @if (EnablePinAnnouncements)
+        {
+            @if (isAnnouncementActive && currentAnnouncedLocation != null)
+            {
+                <span class="tour-status">🎉 Announcing: @Truncate(currentAnnouncedLocation.Value.LocationDescription, 30)</span>
+            }
+            @if (announcementQueue.Count > 0 && !isAnnouncementActive)
+            {
+                <span class="tour-pending">🎊 @announcementQueue.Count announcement(s) queued</span>
+            }
+        }
     </div>
 		}
 
     @if (IsTourActive && CurrentTourStatus != null)
     {
         <div class="tour-info">
-            <h5 class="tour-info-title">🎯 Tour Progress</h5>
+        <h5 class="tour-info-title">🎯 Tour Progress</h5>
             @try
             {
                 var statusObj = (dynamic)CurrentTourStatus;

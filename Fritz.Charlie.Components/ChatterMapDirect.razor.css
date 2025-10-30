@@ -21,7 +21,7 @@
 
 /* Test Message Input */
 .test-message-container {
-    margin-bottom: 20px;
+margin-bottom: 20px;
     padding: 15px;
     background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
     border-radius: 8px;
@@ -31,13 +31,13 @@
 .test-title {
     margin: 0 0 10px 0;
     color: #0066cc;
-    font-size: 1.1em;
+ font-size: 1.1em;
     font-weight: 600;
 }
 
 .test-input-group {
     display: flex;
-    gap: 10px;
+  gap: 10px;
     margin-bottom: 10px;
 }
 
@@ -45,7 +45,7 @@
     flex: 1;
     padding: 8px 12px;
     border: 1px solid #ccc;
-    border-radius: 4px;
+  border-radius: 4px;
     font-size: 14px;
 }
 
@@ -61,7 +61,7 @@
     color: white;
     border: none;
     border-radius: 4px;
-    cursor: pointer;
+  cursor: pointer;
     font-size: 14px;
     white-space: nowrap;
 }
@@ -127,7 +127,7 @@
     font-size: 0.9em;
     background-color: rgba(255, 193, 7, 0.1);
     padding: 4px 8px;
-    border-radius: 4px;
+  border-radius: 4px;
     border: 1px solid rgba(255, 193, 7, 0.3);
 }
 
@@ -137,7 +137,7 @@
     padding: 20px;
     background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
     border: 2px solid #007bff;
-    border-radius: 12px;
+  border-radius: 12px;
     text-align: left;
     max-width: 700px;
     margin-left: auto;
@@ -147,9 +147,9 @@
 
 .tour-info-title {
     margin: 0 0 15px 0;
-    color: #495057;
-    font-size: 1.2em;
-    font-weight: 700;
+  color: #495057;
+font-size: 1.2em;
+  font-weight: 700;
     border-bottom: 2px solid #007bff;
     padding-bottom: 8px;
 }
@@ -158,7 +158,7 @@
     margin: 8px 0;
     font-size: 0.95em;
     color: #6c757d;
-    line-height: 1.4;
+  line-height: 1.4;
 }
 
 .tour-info-detail strong {
@@ -172,19 +172,19 @@
     border: none !important;
     border-radius: 50%;
     transition: all 0.3s ease;
-    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.2));
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.2));
 }
 
 ::deep .marker-cluster-custom:hover {
-    transform: scale(1.1);
+ transform: scale(1.1);
     filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.3));
 }
 
 ::deep .marker-cluster-custom div {
     margin: 0 !important;
-    border-radius: 50% !important;
+  border-radius: 50% !important;
     font-family: "Segoe UI", Arial, Helvetica, sans-serif !important;
-    line-height: 1 !important;
+  line-height: 1 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -206,12 +206,194 @@
     margin: 12px 16px;
     font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
     font-size: 0.9em;
-    line-height: 1.4;
+  line-height: 1.4;
 }
 
 ::deep .leaflet-popup-content strong {
     color: #495057;
     font-weight: 600;
+}
+
+/* NEW: Pin Celebration Styles */
+
+/* Confetti burst animation */
+@keyframes confetti-burst {
+    0% {
+        transform: translate(0, 0) rotate(0deg);
+        opacity: 1;
+}
+    100% {
+    transform: translate(var(--dx), var(--dy)) rotate(720deg);
+opacity: 0;
+    }
+}
+
+/* Pulse ring animation */
+@keyframes pulse-ring {
+    0% {
+        transform: scale(1);
+     opacity: 1;
+}
+    100% {
+        transform: scale(3);
+   opacity: 0;
+    }
+}
+
+/* Pin celebration modal */
+::deep .pin-celebration-modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+ transform: translate(-50%, -50%) scale(0.8);
+    z-index: 3000;
+    opacity: 0;
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    max-width: 400px;
+    width: 90%;
+}
+
+::deep .pin-celebration-modal.visible {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+}
+
+::deep .celebration-modal-content {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+    border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+    border: 2px solid #e9ecef;
+}
+
+::deep .celebration-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+    color: white;
+    display: flex;
+  align-items: center;
+    gap: 15px;
+}
+
+::deep .celebration-icon {
+ font-size: 2.5em;
+    animation: celebration-bounce 1s ease-in-out infinite;
+}
+
+@keyframes celebration-bounce {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+    }
+    25% {
+        transform: translateY(-10px) rotate(-10deg);
+    }
+    75% {
+        transform: translateY(-5px) rotate(10deg);
+    }
+}
+
+::deep .celebration-title {
+    font-size: 1.4em;
+    font-weight: 700;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+::deep .celebration-body {
+    padding: 25px;
+}
+
+::deep .celebration-location {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+    border-radius: 12px;
+    border: 2px solid #b3d9ff;
+}
+
+::deep .location-icon {
+  font-size: 2em;
+    animation: location-pulse 2s ease-in-out infinite;
+}
+
+@keyframes location-pulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+ 50% {
+        transform: scale(1.2);
+    }
+}
+
+::deep .location-name {
+font-size: 1.2em;
+    font-weight: 700;
+    color: #2c3e50;
+    flex: 1;
+}
+
+::deep .celebration-details {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+::deep .detail-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 15px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+::deep .detail-item:hover {
+    transform: translateX(5px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+::deep .detail-icon {
+ font-size: 1.3em;
+}
+
+::deep .detail-text {
+    font-size: 1em;
+    color: #495057;
+    font-weight: 600;
+}
+
+::deep .celebration-footer {
+    padding: 20px;
+    background: #f8f9fa;
+    border-top: 1px solid #e9ecef;
+    display: flex;
+    justify-content: center;
+}
+
+::deep .celebration-dismiss-btn {
+    padding: 12px 30px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+  border-radius: 8px;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+::deep .celebration-dismiss-btn:hover {
+  transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+}
+
+::deep .celebration-dismiss-btn:active {
+    transform: translateY(0);
 }
 
 /* Responsive adjustments */
@@ -228,10 +410,10 @@
     
     .tour-status,
     .tour-pending {
-        display: block;
-        margin: 8px 0 0 0;
-        font-size: 0.85em;
-    }
+   display: block;
+   margin: 8px 0 0 0;
+    font-size: 0.85em;
+  }
     
     .tour-info {
         margin-top: 15px;
@@ -242,17 +424,42 @@
     }
     
     .tour-info-title {
-        font-size: 1.1em;
+  font-size: 1.1em;
     }
     
     .tour-info-detail {
         font-size: 0.9em;
     }
+
+    ::deep .pin-celebration-modal {
+        width: 95%;
+        max-width: none;
+    }
+
+  ::deep .celebration-header {
+   padding: 15px;
+    }
+
+    ::deep .celebration-icon {
+        font-size: 2em;
+    }
+
+    ::deep .celebration-title {
+        font-size: 1.2em;
+    }
+
+    ::deep .celebration-body {
+        padding: 20px;
+    }
+
+    ::deep .location-name {
+        font-size: 1.1em;
+    }
 }
 
 /* Animation for tour transitions */
 @keyframes tour-pulse {
-    0% { transform: scale(1); opacity: 1; }
+  0% { transform: scale(1); opacity: 1; }
     50% { transform: scale(1.05); opacity: 0.8; }
     100% { transform: scale(1); opacity: 1; }
 }
