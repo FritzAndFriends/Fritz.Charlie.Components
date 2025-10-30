@@ -205,39 +205,54 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             }
 
             tourClusters = GenerateClusters(locationsList, forTour: true);
+            
+            // Log clustering results
+         Console.WriteLine($"Generated {tourClusters.Count} clusters from {locationsList.Count} locations");
+       foreach (var cluster in tourClusters)
+{
+         Console.WriteLine($"  Cluster: {cluster.Count} locations, center ({cluster.CenterLatitude:F2}, {cluster.CenterLongitude:F2}), avg distance: {cluster.AverageDistanceFromCenter:F0}km");
+    }
+     
             var arrangedClusters = ArrangeClustersByDistance(tourClusters);
 
-            if (arrangedClusters.Count > 15)
-            {
-                arrangedClusters = arrangedClusters.Take(15).ToList();
-            }
+      if (arrangedClusters.Count > 15)
+{
+          arrangedClusters = arrangedClusters.Take(15).ToList();
+ }
 
-            var tourStops = arrangedClusters.Select(cluster => new
+        var tourStops = arrangedClusters.Select(cluster => new
             {
-                lat = Math.Round(cluster.CenterLatitude, 6),
-                lng = Math.Round(cluster.CenterLongitude, 6),
-                zoom = DetermineZoomLevel(cluster),
-                description = GetLocationDescription(cluster),
-                locationCount = cluster.Locations.Count,
-                locations = cluster.Locations.Take(10).Select(loc => new
-                {
-                    description = Truncate(loc.LocationDescription, 50),
-                    lat = Math.Round((double)loc.Latitude, 6),
-                    lng = Math.Round((double)loc.Longitude, 6),
-                    userType = loc.UserType,
-                    service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
-                }).ToArray()
-            }).ToArray();
+       lat = Math.Round(cluster.CenterLatitude, 6),
+  lng = Math.Round(cluster.CenterLongitude, 6),
+             zoom = DetermineZoomLevel(cluster),
+              description = GetLocationDescription(cluster),
+     locationCount = cluster.Locations.Count,
+    locations = cluster.Locations.Take(10).Select(loc => new
+   {
+      description = Truncate(loc.LocationDescription, 50),
+    lat = Math.Round((double)loc.Latitude, 6),
+         lng = Math.Round((double)loc.Longitude, 6),
+              userType = loc.UserType,
+         service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
+   }).ToArray()
+  }).ToArray();
+         
+    // Log tour stops with zoom levels
+            Console.WriteLine($"Tour will visit {tourStops.Length} stops:");
+ for (int i = 0; i < tourStops.Length; i++)
+            {
+                Console.WriteLine($"  Stop {i + 1}: {tourStops[i].description} - {tourStops[i].locationCount} locations, zoom level {tourStops[i].zoom}");
+   }
 
             await mapModule.InvokeVoidAsync("startTour", (object)tourStops);
-            IsTourActive = true;
+        IsTourActive = true;
             StateHasChanged();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ERROR starting tour: {ex.Message}");
-            IsTourActive = false;
-            CurrentTourLocation = null;
+       Console.WriteLine($"ERROR starting tour: {ex.Message}");
+    IsTourActive = false;
+          CurrentTourLocation = null;
             StateHasChanged();
         }
     }
@@ -311,105 +326,193 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         return true;
     }
 
-    // --- Existing clustering logic unchanged below ---
+    // --- Improved clustering logic ---
     private List<ClusterGroup> GenerateClusters(List<ViewerLocationEvent> locations, bool forTour = false)
     {
         var validLocations = locations.Where(IsValidLocation).ToList();
         if (validLocations.Count == 0) return new List<ClusterGroup>();
 
-        var clusters = new List<ClusterGroup>();
-        var processed = new HashSet<Guid>();
+    var clusters = new List<ClusterGroup>();
+   var processed = new HashSet<Guid>();
 
-        double clusterDistanceKm = forTour ? 2000.0 :
-            validLocations.Count switch
-            {
-                <= 10 => 500.0,
-                <= 25 => 800.0,
-                <= 50 => 1200.0,
-                _ => 1500.0
-            };
+        // Use 1000km for all clustering scenarios
+        double clusterDistanceKm = 1000.0;
 
-        foreach (var location in validLocations)
+// Calculate density scores to prioritize high-density areas
+        var locationsByDensity = CalculateDensityScores(validLocations, clusterDistanceKm);
+
+     // Process locations by density (highest first) to create better clusters
+        foreach (var location in locationsByDensity.OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key))
         {
-            if (processed.Contains(location.Id)) continue;
+      if (processed.Contains(location.Id)) continue;
 
-            var cluster = new ClusterGroup();
-            cluster.Locations.Add(location);
-            processed.Add(location.Id);
+  var cluster = new ClusterGroup();
+   var toProcess = new Queue<ViewerLocationEvent>();
+     toProcess.Enqueue(location);
 
-            foreach (var otherLocation in validLocations)
-            {
-                if (processed.Contains(otherLocation.Id)) continue;
+          // BFS-style expansion: find all connected locations within range
+          while (toProcess.Count > 0)
+       {
+          var current = toProcess.Dequeue();
+     if (processed.Contains(current.Id)) continue;
 
-                if (IsWithinDistance(location, otherLocation, clusterDistanceKm) &&
-                    IsSameContinent(location, otherLocation))
-                {
-                    cluster.Locations.Add(otherLocation);
-                    processed.Add(otherLocation.Id);
-                }
-            }
+        cluster.Locations.Add(current);
+   processed.Add(current.Id);
 
-            cluster.CalculateCenter();
-            clusters.Add(cluster);
+       // Find all nearby unprocessed locations and add them to the queue
+        foreach (var nearby in validLocations)
+              {
+          if (processed.Contains(nearby.Id)) continue;
+
+              if (IsWithinDistance(current, nearby, clusterDistanceKm) &&
+  IsSameRegion(current, nearby))  // Use region instead of continent
+        {
+                toProcess.Enqueue(nearby);
+      }
+      }
+    }
+
+          cluster.CalculateCenter();
+        clusters.Add(cluster);
+      }
+
+ return clusters;
+    }
+
+    /// <summary>
+    /// Calculate density scores for each location based on nearby neighbors
+    /// </summary>
+    private Dictionary<ViewerLocationEvent, int> CalculateDensityScores(
+        List<ViewerLocationEvent> locations, double radiusKm)
+ {
+        var densityScores = new Dictionary<ViewerLocationEvent, int>();
+
+        foreach (var location in locations)
+        {
+            int nearbyCount = locations.Count(other =>
+         other.Id != location.Id &&
+       IsWithinDistance(location, other, radiusKm));
+  densityScores[location] = nearbyCount;
+      }
+
+        return densityScores;
+    }
+
+  /// <summary>
+    /// Check if two locations are in the same geographic region (more granular than continent)
+    /// </summary>
+    private bool IsSameRegion(ViewerLocationEvent loc1, ViewerLocationEvent loc2)
+    {
+        var region1 = GetRegionCode((double)loc1.Latitude, (double)loc1.Longitude);
+        var region2 = GetRegionCode((double)loc2.Latitude, (double)loc2.Longitude);
+        return region1 == region2;
+    }
+
+    /// <summary>
+    /// Get more granular region codes with sub-regions for better clustering
+    /// </summary>
+    private string GetRegionCode(double latitude, double longitude)
+    {
+        // North America with sub-regions
+        if (latitude >= 5 && longitude >= -180 && longitude <= -30)
+        {
+       if (longitude <= -125) return "NAM-WEST";       // West Coast (Pacific)
+       if (longitude <= -105) return "NAM-MOUNTAIN";   // Mountain/Rockies
+if (longitude <= -95) return "NAM-CENTRAL";     // Great Plains/Central
+      if (longitude <= -80) return "NAM-MIDWEST";     // Midwest/Great Lakes
+            return "NAM-EAST";                // East Coast (Atlantic)
+ }
+
+        // South America with sub-regions
+        if (latitude >= -60 && latitude < 15 && longitude >= -85 && longitude <= -30)
+{
+      if (longitude <= -70) return "SAM-WEST";        // Western (Andes)
+     if (latitude < -20) return "SAM-SOUTH";   // Southern cone
+      return "SAM-EAST";   // Eastern (Brazil/Atlantic)
         }
 
-        return clusters;
+        // Europe with sub-regions
+ if (latitude >= 35 && longitude >= -10 && longitude <= 60)
+        {
+   if (longitude <= 15) return "EUR-WEST"; // Western Europe
+      if (longitude <= 30) return "EUR-CENTRAL";      // Central Europe
+            if (latitude >= 55) return "EUR-NORTH";         // Northern Europe
+  if (latitude <= 45) return "EUR-SOUTH";  // Southern Europe
+  return "EUR-EAST";        // Eastern Europe
+        }
+
+        // Africa with sub-regions
+        if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55)
+        {
+        if (latitude >= 15) return "AFR-NORTH";       // Northern Africa
+ if (longitude <= 15) return "AFR-WEST";         // Western Africa
+            if (longitude >= 35) return "AFR-EAST"; // Eastern Africa
+            return "AFR-CENTRAL";       // Central Africa
+        }
+
+        // Asia with sub-regions
+ if (latitude >= 0 && longitude >= 60 && longitude <= 180)
+        {
+         if (longitude <= 100) return "ASI-SOUTH";       // South Asia
+ if (latitude >= 50) return "ASI-NORTH";         // Northern Asia (Siberia)
+        if (longitude >= 140) return "ASI-EAST";    // East Asia
+        if (latitude <= 30) return "ASI-SOUTHEAST";     // Southeast Asia
+  return "ASI-CENTRAL";                // Central Asia
+        }
+
+        // Southeast Asia (additional coverage)
+        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150)
+ return "ASI-SOUTHEAST";
+
+      // Oceania with sub-regions
+        if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180)
+        {
+     if (longitude >= 160) return "OCE-PACIFIC";   // Pacific Islands
+ if (latitude >= -25) return "OCE-NORTH";        // Northern Australia
+            return "OCE-SOUTH";        // Southern Australia
+     }
+
+  // Antarctica
+      if (latitude < -60) return "ANT";
+
+        // Ocean/undefined regions
+      return "OCN";
     }
 
     private List<ClusterGroup> ArrangeClustersByDistance(List<ClusterGroup> clusters)
     {
         if (clusters.Count <= 1) return clusters;
 
-        var arranged = new List<ClusterGroup>();
+ var arranged = new List<ClusterGroup>();
         var remaining = new List<ClusterGroup>(clusters);
         var centerLat = 39.8283;
         var centerLng = -98.5795;
 
-        var current = remaining.OrderBy(c =>
+   var current = remaining.OrderBy(c =>
             Math.Sqrt(Math.Pow(c.CenterLatitude - centerLat, 2) + Math.Pow(c.CenterLongitude - centerLng, 2)))
-            .First();
+ .First();
 
         arranged.Add(current);
-        remaining.Remove(current);
+  remaining.Remove(current);
 
-        while (remaining.Count > 0)
+  while (remaining.Count > 0)
         {
-            var farthest = remaining.OrderByDescending(c =>
-                Math.Sqrt(Math.Pow(c.CenterLatitude - current.CenterLatitude, 2) +
-                          Math.Pow(c.CenterLongitude - current.CenterLongitude, 2)))
-                .First();
+       var farthest = remaining.OrderByDescending(c =>
+          Math.Sqrt(Math.Pow(c.CenterLatitude - current.CenterLatitude, 2) +
+      Math.Pow(c.CenterLongitude - current.CenterLongitude, 2)))
+         .First();
 
             arranged.Add(farthest);
-            remaining.Remove(farthest);
-            current = farthest;
+     remaining.Remove(farthest);
+        current = farthest;
         }
 
-        return arranged;
+  return arranged;
     }
 
     private bool IsWithinDistance(ViewerLocationEvent loc1, ViewerLocationEvent loc2, double maxDistanceKm) =>
-        CalculateDistanceKm((double)loc1.Latitude, (double)loc1.Longitude,
-            (double)loc2.Latitude, (double)loc2.Longitude) <= maxDistanceKm;
-
-    private bool IsSameContinent(ViewerLocationEvent loc1, ViewerLocationEvent loc2)
-    {
-        var continent1 = GetContinentCode((double)loc1.Latitude, (double)loc1.Longitude);
-        var continent2 = GetContinentCode((double)loc2.Latitude, (double)loc2.Longitude);
-        return continent1 == continent2;
-    }
-
-    private string GetContinentCode(double latitude, double longitude)
-    {
-        if (latitude >= -60 && latitude < 15 && longitude >= -85 && longitude <= -30) return "SAM";
-        if (latitude >= 5 && longitude >= -180 && longitude <= -30) return "NAM";
-        if (latitude >= 35 && longitude >= -10 && longitude <= 60) return "EUR";
-        if (latitude >= -35 && latitude <= 40 && longitude >= -20 && longitude <= 55) return "AFR";
-        if (latitude >= 0 && longitude >= 60 && longitude <= 180) return "ASI";
-        if (latitude >= -10 && latitude <= 25 && longitude >= 90 && longitude <= 150) return "SEA";
-        if (latitude >= -50 && latitude <= 0 && longitude >= 110 && longitude <= 180) return "OCE";
-        if (latitude < -60) return "ANT";
-        return "OCN";
-    }
+CalculateDistanceKm((double)loc1.Latitude, (double)loc1.Longitude,
+          (double)loc2.Latitude, (double)loc2.Longitude) <= maxDistanceKm;
 
     private double CalculateDistanceKm(double lat1, double lng1, double lat2, double lng2)
     {
@@ -524,27 +627,48 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
 
     private int DetermineZoomLevel(ClusterGroup cluster)
     {
-        // Determine appropriate zoom level based on cluster characteristics
+      // For single location, zoom in to city level
         if (cluster.Count == 1)
+ {
+          return Math.Min(8, MaxZoom); // Street/building level for single pin
+     }
+
+        // Calculate the zoom level based on the actual geographic spread of the cluster
+  // to ensure all pins are visible
+   var avgDistance = cluster.AverageDistanceFromCenter;
+        
+        // Zoom levels for tight clustering:
+        // - <10km: Neighborhood/street level (zoom 10-12)
+  // - 10-50km: City level (zoom 8-10)
+     // - 50-200km: Metropolitan area (zoom 6-8)
+        // - 200-500km: Regional (zoom 5-6)
+        // - 500-1000km: Multi-state/province (zoom 4-5)
+        // - >1000km: Country level (zoom 3-4)
+        
+ if (avgDistance < 10)
         {
-            return Math.Min(6, MaxZoom); // City level for single locations
+  return Math.Min(10, MaxZoom); // Very tight cluster - neighborhood level
         }
-        else if (cluster.AverageDistanceFromCenter < 50)
+else if (avgDistance < 50)
+      {
+        return Math.Min(8, MaxZoom); // City level
+        }
+        else if (avgDistance < 200)
         {
-            return Math.Min(7, MaxZoom); // Close cluster - zoom in more
+            return Math.Min(7, MaxZoom); // Metropolitan area
         }
-        else if (cluster.AverageDistanceFromCenter < 200)
+     else if (avgDistance < 500)
+   {
+       return Math.Min(5, MaxZoom); // Regional view
+      }
+   else if (avgDistance < 1000)
         {
-            return Math.Min(5, MaxZoom); // Medium spread - state level
-        }
-        else if (cluster.AverageDistanceFromCenter < 500)
-        {
-            return Math.Min(4, MaxZoom); // Large spread - regional level
-        }
+     return Math.Min(4, MaxZoom); // Multi-region view
+      }
         else
-        {
-            return Math.Min(3, MaxZoom); // Very large spread - country level
-        }
+ {
+     return Math.Min(3, MaxZoom); // Country/continent view
+   }
     }
 
     private string GetLocationDescription(ClusterGroup cluster)
