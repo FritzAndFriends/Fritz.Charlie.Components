@@ -428,30 +428,30 @@ class ChatterMapManager {
             className: 'custom-popup'
         });
 
-     // Store marker reference with continent info
+        // Store marker reference with continent info
         this.markers.set(id, { marker, continentCode });
 
         // Maintain reverse lookup for O(1) cluster aggregation
         this.markerToIdMap.set(marker, id);
 
         // Add to appropriate continent cluster group
-      clusterGroup.addLayer(marker);
+        clusterGroup.addLayer(marker);
     }
 
     // Create marker icon with optional count badge
     createMarkerIcon(iconUrl, count, userType) {
         if (count <= 1) {
-     // Standard icon without badge
-       return L.icon({
-    iconUrl: iconUrl,
-      iconSize: [20, 20],
-        iconAnchor: [10, 10],
-    popupAnchor: [0, -10],
+            // Standard icon without badge
+            return L.icon({
+                iconUrl: iconUrl,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+                popupAnchor: [0, -10],
                 className: `marker-${userType.toLowerCase()}`
- });
+            });
         } else {
-    // Create custom icon with count badge
-    const html = `
+            // Create custom icon with count badge
+            const html = `
               <div style="position: relative; width: 24px; height: 24px;">
          <img src="${iconUrl}" style="width: 20px; height: 20px;" />
       <div style="
@@ -475,30 +475,30 @@ justify-content: center;
    `;
 
             return L.divIcon({
-         html: html,
-   iconSize: [24, 24],
-              iconAnchor: [12, 12],
+                html: html,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12],
                 popupAnchor: [0, -12],
-       className: `marker-${userType.toLowerCase()}-aggregated`
-    });
+                className: `marker-${userType.toLowerCase()}-aggregated`
+            });
         }
     }
 
     // Get icon URL from C# component or use default
     async getIconUrl(userType, service) {
-    // Try to get icon URL from C# callback first
-     if (this.dotNetObjectRef) {
-     try {
-        const iconUrl = await this.dotNetObjectRef.invokeMethodAsync('GetIconUrl', userType, service);
-         if (iconUrl) {
-     console.log(`Got icon URL from C#: ${iconUrl} for ${userType}/${service}`);
-          return iconUrl;
-      } else {
-                return this.getDefaultIconUrl(userType, service);
-   }
-       } catch (error) {
-            console.warn('Failed to get icon URL from C#, using JavaScript fallback:', error);
-   }
+        // Try to get icon URL from C# callback first
+        if (this.dotNetObjectRef) {
+            try {
+                const iconUrl = await this.dotNetObjectRef.invokeMethodAsync('GetIconUrl', userType, service);
+                if (iconUrl) {
+                    console.log(`Got icon URL from C#: ${iconUrl} for ${userType}/${service}`);
+                    return iconUrl;
+                } else {
+                    return this.getDefaultIconUrl(userType, service);
+                }
+            } catch (error) {
+                console.warn('Failed to get icon URL from C#, using JavaScript fallback:', error);
+            }
         }
 
         // Fallback to JavaScript-side defaults if C# callback fails or returns null
@@ -684,39 +684,48 @@ top: 50%;
         const modal = document.createElement('div');
         modal.id = `${this.elementId}-celebration-modal`;
         modal.className = 'pin-celebration-modal';
+        // Set initial opacity for animation
+        modal.style.opacity = '0';
+        modal.style.transition = 'opacity 0.3s ease';
 
-        // Service-specific styling
+        // Service-specific styling (KEEP ORIGINAL COLORS)
         const serviceColor = service === 'YouTube' ? '#ff0000' : '#9146ff';
         const serviceIcon = service === 'YouTube' ? '▶️' : '📺';
 
+        // Simple positioning: 50px to the right, centered vertically
+        const modalLeft = 250;
+        const modalTop = 20;
+        
+        console.log(`Modal positioning: modalLeft=${modalLeft}px, modalTop=${modalTop}px`);
+
         modal.innerHTML = `
-      <div class="celebration-modal-content">
-  <div class="celebration-header" style="border-left: 4px solid ${serviceColor};">
-              <div class="celebration-icon">🎉</div>
-                 <div class="celebration-title">New Viewer Location!</div>
+      <div class="celebration-modal-content" style="position: absolute; left: ${modalLeft}px; top: ${modalTop}px; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); padding: 0; min-width: 280px; max-width: 320px; z-index: 3000;">
+  <div class="celebration-header" style="border-left: 4px solid ${serviceColor}; padding: 15px; background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(240,240,255,0.95) 100%); border-radius: 12px 12px 0 0;">
+              <div class="celebration-icon" style="font-size: 32px; text-align: center; margin-bottom: 8px;">🎉</div>
+                 <div class="celebration-title" style="font-size: 18px; font-weight: 700; text-align: center; color: #333;">New Viewer Location!</div>
      </div>
-          <div class="celebration-body">
-     <div class="celebration-location">
-        <div class="location-icon">📍</div>
-        <div class="location-name">${description}</div>
+          <div class="celebration-body" style="padding: 15px;">
+     <div class="celebration-location" style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: rgba(0,123,255,0.05); border-radius: 8px;">
+        <div class="location-icon" style="font-size: 24px;">📍</div>
+        <div class="location-name" style="font-size: 16px; font-weight: 600; color: #333; flex: 1;">${description}</div>
         </div>
-              <div class="celebration-details">
-            <div class="detail-item">
-   <span class="detail-icon">${serviceIcon}</span>
-    <span class="detail-text">${service}</span>
+              <div class="celebration-details" style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="detail-item" style="display: flex; align-items: center; gap: 10px; padding: 6px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+   <span class="detail-icon" style="font-size: 20px;">${serviceIcon}</span>
+    <span class="detail-text" style="color: #666; font-size: 14px;">${service}</span>
            </div>
-       <div class="detail-item">
-             <span class="detail-icon">👤</span>
-          <span class="detail-text">${this.formatUserType(userType)}</span>
+       <div class="detail-item" style="display: flex; align-items: center; gap: 10px; padding: 6px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+             <span class="detail-icon" style="font-size: 20px;">👤</span>
+          <span class="detail-text" style="color: #666; font-size: 14px;">${this.formatUserType(userType)}</span>
      </div>
-       <div class="detail-item">
-  <span class="detail-icon">🌍</span>
-  <span class="detail-text">${lat.toFixed(2)}, ${lng.toFixed(2)}</span>
+       <div class="detail-item" style="display: flex; align-items: center; gap: 10px; padding: 6px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+  <span class="detail-icon" style="font-size: 20px;">🌍</span>
+  <span class="detail-text" style="color: #666; font-size: 14px;">${lat.toFixed(2)}, ${lng.toFixed(2)}</span>
          </div>
              </div>
        </div>
-       <div class="celebration-footer">
-      <button class="celebration-dismiss-btn" onclick="window.dismissCelebrationModal()">
+       <div class="celebration-footer" style="padding: 15px; border-top: 1px solid rgba(0,0,0,0.1); background: rgba(0,0,0,0.02); border-radius: 0 0 12px 12px;">
+      <button class="celebration-dismiss-btn" onclick="window.dismissCelebrationModal()" style="width: 100%; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: transform 0.2s ease;">
         Got it! ✓
               </button>
          </div>
@@ -725,63 +734,66 @@ top: 50%;
 
         mapElement.appendChild(modal);
 
-     // Animate in
+        // Force a reflow to ensure the initial opacity is applied before animation
+        modal.offsetHeight;
+
+        // Animate in
         setTimeout(() => {
-            modal.classList.add('visible');
-    }, 50);
+            modal.style.opacity = '1';
+        }, 50);
 
         // Store reference for dismissal
         window.dismissCelebrationModal = () => {
-     this.dismissLocationModal();
+            this.dismissLocationModal();
             if (this.celebrationTimeout) {
-      clearTimeout(this.celebrationTimeout);
-         this.celebrationTimeout = null;
-         }
- this.celebrationActive = false;
+                clearTimeout(this.celebrationTimeout);
+                this.celebrationTimeout = null;
+            }
+            this.celebrationActive = false;
         };
     }
 
     // Dismiss location modal
     dismissLocationModal() {
-   const modal = document.getElementById(`${this.elementId}-celebration-modal`);
+        const modal = document.getElementById(`${this.elementId}-celebration-modal`);
         if (modal) {
-            modal.classList.remove('visible');
-         setTimeout(() => {
+            modal.style.opacity = '0';
+            setTimeout(() => {
                 modal.remove();
             }, 300);
         }
- }
+    }
 
     // Format user type for display
     formatUserType(userType) {
         const typeMap = {
-    'broadcaster': '🎙️ Broadcaster',
+            'broadcaster': '🎙️ Broadcaster',
             'moderator': '⚔️ Moderator',
             'subscriber': '⭐ Subscriber',
             'vip': '💎 VIP',
-     'user': '👥 Viewer'
- };
+            'user': '👥 Viewer'
+        };
         return typeMap[userType?.toLowerCase()] || '👥 Viewer';
     }
 
     // Notify C# of user navigation start
     notifyUserNavigationStart() {
-    if (this.dotNetObjectRef && !this.tourActive) {
-      clearTimeout(this.userNavigationTimeout);
+        if (this.dotNetObjectRef && !this.tourActive) {
+            clearTimeout(this.userNavigationTimeout);
             this.dotNetObjectRef.invokeMethodAsync('OnUserNavigationStart')
-           .catch(err => console.warn('Failed to notify navigation start:', err));
+                .catch(err => console.warn('Failed to notify navigation start:', err));
         }
     }
 
     // Notify C# of user navigation end (with debounce)
     notifyUserNavigationEnd() {
         if (this.dotNetObjectRef && !this.tourActive) {
-          clearTimeout(this.userNavigationTimeout);
+            clearTimeout(this.userNavigationTimeout);
             this.userNavigationTimeout = setTimeout(() => {
-  this.dotNetObjectRef.invokeMethodAsync('OnUserNavigationEnd')
-                  .catch(err => console.warn('Failed to notify navigation end:', err));
-       }, 500);
-    }
+                this.dotNetObjectRef.invokeMethodAsync('OnUserNavigationEnd')
+                    .catch(err => console.warn('Failed to notify navigation end:', err));
+            }, 500);
+        }
     }
 
     // Sleep utility for async operations
@@ -795,7 +807,7 @@ top: 50%;
         if (markerInfo) {
             const { marker, continentCode } = markerInfo;
             const clusterGroup = this.markerClusterGroups.get(continentCode);
-            
+
             if (clusterGroup) {
                 clusterGroup.removeLayer(marker);
                 this.markers.delete(id);
@@ -856,8 +868,83 @@ top: 50%;
         // Notify C# component that tour has started
         this.notifyTourStatusChanged();
 
+        // Create bottom overlay for region descriptions
+        this.createRegionOverlay();
+
         // Start the tour immediately with the first location
         this.continueTour();
+    }
+
+    // Create bottom overlay for region descriptions
+    createRegionOverlay() {
+        // Remove existing overlay if present
+        this.removeRegionOverlay();
+
+        // Create overlay container
+        const overlay = document.createElement('div');
+        overlay.id = `${this.elementId}-region-overlay`;
+        overlay.className = 'region-overlay';
+        overlay.style.cssText = `
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, rgba(0, 123, 255, 0.95) 0%, rgba(102, 16, 242, 0.95) 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            font-family: 'Segoe UI', sans-serif;
+            text-align: center;
+            font-weight: 600;
+            font-size: 16px;
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+            pointer-events: none;
+        `;
+
+        // Add to map container
+        const mapElement = document.getElementById(this.elementId);
+        mapElement.style.position = 'relative';
+        mapElement.appendChild(overlay);
+
+        // Animate in
+        setTimeout(() => {
+            overlay.style.opacity = '1';
+            overlay.style.transform = 'translateY(0)';
+        }, 100);
+    }
+
+    // Update region overlay content
+    updateRegionOverlay(description, locationCount) {
+        const overlay = document.getElementById(`${this.elementId}-region-overlay`);
+        if (overlay) {
+            overlay.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+                    <span style="font-size: 24px;">🎯</span>
+                    <div style="text-align: left;">
+                        <div style="font-size: 18px; font-weight: 700; margin-bottom: 2px;">${description}</div>
+                        <div style="font-size: 14px; opacity: 0.9;">${locationCount} viewer(s) in this region</div>
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    // Remove region overlay
+    removeRegionOverlay() {
+        const overlay = document.getElementById(`${this.elementId}-region-overlay`);
+        if (overlay) {
+            overlay.style.opacity = '0';
+            overlay.style.transform = 'translateY(20px)';
+            setTimeout(() => {
+                overlay.remove();
+            }, 300);
+        }
     }
 
     // Continue tour to next location
@@ -877,6 +964,9 @@ top: 50%;
 
         const stop = this.tourStops[this.currentTourIndex];
         console.log(`Tour stop ${this.currentTourIndex + 1}/${this.tourStops.length}: ${stop.description}`);
+
+        // Update region overlay with current stop info
+        this.updateRegionOverlay(stop.description, stop.locationCount || stop.locations?.length || 0);
 
         // Fly to the tour stop with appropriate zoom (respecting max zoom)
         const targetZoom = Math.min(stop.zoom || 4, this.getMaxZoom());
@@ -915,6 +1005,9 @@ top: 50%;
             clearTimeout(this.tourTimer);
             this.tourTimer = null;
         }
+
+        // Remove region overlay
+        this.removeRegionOverlay();
 
         // Return to world view centered over the Atlantic Ocean with smooth animation
         // Only if not already at world view
@@ -970,44 +1063,44 @@ top: 50%;
         console.log('Disposing map resources');
 
         if (this.tourTimer) {
-     clearTimeout(this.tourTimer);
+            clearTimeout(this.tourTimer);
             this.tourTimer = null;
         }
 
         if (this.celebrationTimeout) {
-     clearTimeout(this.celebrationTimeout);
+            clearTimeout(this.celebrationTimeout);
             this.celebrationTimeout = null;
         }
 
-    if (this.userNavigationTimeout) {
-    clearTimeout(this.userNavigationTimeout);
+        if (this.userNavigationTimeout) {
+            clearTimeout(this.userNavigationTimeout);
             this.userNavigationTimeout = null;
         }
 
         if (this.viewportUpdateThrottle) {
-     clearTimeout(this.viewportUpdateThrottle);
-    this.viewportUpdateThrottle = null;
+            clearTimeout(this.viewportUpdateThrottle);
+            this.viewportUpdateThrottle = null;
         }
 
-     this.dismissLocationModal();
+        this.dismissLocationModal();
 
         if (this.map) {
             this.map.remove();
             this.map = null;
- }
+        }
 
         this.markers.clear();
         this.allMarkerData.clear();
-   this.visibleMarkers.clear();
+        this.visibleMarkers.clear();
         this.markerClusterGroups.clear();
 
         // Clear reverse lookup
         this.markerToIdMap.clear();
 
-      this.tourStops = [];
+        this.tourStops = [];
         this.tourActive = false;
         this.currentTourIndex = 0;
-    this.celebrationActive = false;
+        this.celebrationActive = false;
     }
 }
 
@@ -1025,13 +1118,13 @@ export function initializeMap(elementId, height, width, lat, lng, zoom, maxZoom 
 
     mapInstance = new ChatterMapManager();
     const success = mapInstance.initializeMap(elementId, height, width, lat, lng, zoom, maxZoom);
-    
+
     // If there was a pending DotNet reference, set it now
     if (success && pendingDotNetRef) {
         mapInstance.setDotNetReference(pendingDotNetRef);
         pendingDotNetRef = null;
     }
-    
+
     return success;
 }
 
@@ -1117,10 +1210,10 @@ export function getTourStatus() {
 
 export function setDotNetReference(dotNetObjectRef) {
     if (mapInstance) {
-  mapInstance.setDotNetReference(dotNetObjectRef);
+        mapInstance.setDotNetReference(dotNetObjectRef);
     } else {
- // Store reference to set later when map is initialized
-  pendingDotNetRef = dotNetObjectRef;
+        // Store reference to set later when map is initialized
+        pendingDotNetRef = dotNetObjectRef;
         console.log('DotNet reference stored, will be set when map initializes');
     }
 }
