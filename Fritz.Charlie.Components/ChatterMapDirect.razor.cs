@@ -39,6 +39,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     // NEW: Aggregation structures
     private readonly Dictionary<(double lat, double lng), AggregateLocation> aggregatedMarkers = new();
     private readonly Dictionary<Guid, (double lat, double lng)> locationKeyIndex = new();
+    private readonly Dictionary<string, ViewerLocationEvent> userLocationIndex = new(); // Track locations by UserId
 
     // NEW: Pin Announcement features
     [Parameter] public bool EnablePinAnnouncements { get; set; } = false;
@@ -104,76 +105,106 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
                 return;
             }
 
-            // Check if this exact location ID is already plotted (prevent duplicates)
+            // Check if this user already has a location plotted (prevent duplicates by UserId)
+            if (!string.IsNullOrEmpty(location.UserId) && userLocationIndex.ContainsKey(location.UserId))
+            {
+                Console.WriteLine($"User {location.UserId} already has a location plotted. Ignoring duplicate plot attempt.");
+                return;
+            }
+
+            // Fallback: Check if this exact location ID is already plotted (for locations without UserId)
             if (locationKeyIndex.ContainsKey(location.Id))
             {
                 Console.WriteLine($"Skipping duplicate location {location.Id}");
                 return;
             }
 
-            // Aggregation key � 4 decimal places is ~11m resolution
-            var key = (lat: Math.Round((double)location.Latitude, 4), lng: Math.Round((double)location.Longitude, 4));
-
-            bool isNewMarker = !aggregatedMarkers.ContainsKey(key);
-
-            if (aggregatedMarkers.TryGetValue(key, out var aggregate))
-            {
-                // Add to existing aggregate
-                aggregate.Locations.Add(location);
-                locationKeyIndex[location.Id] = key;
-
-                // Update TourLocations with the new location
-                if (!TourLocations.ContainsKey(location.Id))
-                {
-                    TourLocations.Add(location.Id, location);
-                }
-
-                // Update marker (count + popup content)
-                var popupContent = BuildAggregatedPopupContent(aggregate);
-                await mapModule.InvokeVoidAsync("updateAggregatedMarker",
-                  aggregate.MarkerId,
-                        aggregate.Locations.Count,
-                       popupContent);
-
-                await OnLocationPlotted.InvokeAsync(location);
-            }
-            else
-            {
-                // Create new marker
-                var markerId = location.Id.ToString();
-                var description = Truncate(location.LocationDescription, 100);
-                await mapModule.InvokeVoidAsync("addMarker",
-                   markerId,
-                      Math.Round((double)location.Latitude, 6),
-                    Math.Round((double)location.Longitude, 6),
-                    location.UserType,
-                 description,
-                       location.Service == "YouTube" ? "YouTube" : "Twitch",
-                 1); // initial count
-
-                var newAggregate = new AggregateLocation(markerId, key.lat, key.lng);
-                newAggregate.Locations.Add(location);
-                aggregatedMarkers[key] = newAggregate;
-                locationKeyIndex[location.Id] = key;
-
-                // Add to TourLocations
-                if (!TourLocations.ContainsKey(location.Id))
-                {
-                    TourLocations.Add(location.Id, location);
-                }
-
-                await OnLocationPlotted.InvokeAsync(location);
-            }
-
-            // NEW: Queue announcement for new markers if feature is enabled
-            if (EnablePinAnnouncements && isNewMarker)
-            {
-                QueuePinAnnouncement(location);
-            }
+            // Use the internal plotting method to do the actual work
+            await PlotLocationInternal(location);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"ERROR plotting location {location.Id}: {ex.Message}");
+        }
+    }
+
+    private async Task PlotLocationInternal(ViewerLocationEvent location)
+    {
+        if (!mapInitialized || mapModule == null) return;
+        
+        // This is the core plotting logic without the user deduplication check
+        // to avoid infinite recursion when called from UpdateUserLocation
+        
+        // Aggregation key – 4 decimal places is ~11m resolution
+        var key = (lat: Math.Round((double)location.Latitude, 4), lng: Math.Round((double)location.Longitude, 4));
+
+        bool isNewMarker = !aggregatedMarkers.ContainsKey(key);
+
+        if (aggregatedMarkers.TryGetValue(key, out var aggregate))
+        {
+            // Add to existing aggregate
+            aggregate.Locations.Add(location);
+            locationKeyIndex[location.Id] = key;
+
+            // Track by UserId for deduplication
+            if (!string.IsNullOrEmpty(location.UserId))
+            {
+                userLocationIndex[location.UserId] = location;
+            }
+
+            // Update TourLocations with the new location
+            if (!TourLocations.ContainsKey(location.Id))
+            {
+                TourLocations.Add(location.Id, location);
+            }
+
+            // Update marker (count + popup content)
+            var popupContent = BuildAggregatedPopupContent(aggregate);
+            await mapModule.InvokeVoidAsync("updateAggregatedMarker",
+              aggregate.MarkerId,
+                    aggregate.Locations.Count,
+                   popupContent);
+
+            await OnLocationPlotted.InvokeAsync(location);
+        }
+        else
+        {
+            // Create new marker
+            var markerId = location.Id.ToString();
+            var description = Truncate(location.LocationDescription, 100);
+            await mapModule.InvokeVoidAsync("addMarker",
+               markerId,
+                  Math.Round((double)location.Latitude, 6),
+                Math.Round((double)location.Longitude, 6),
+                location.UserType,
+             description,
+                   location.Service == "YouTube" ? "YouTube" : "Twitch",
+             1); // initial count
+
+            var newAggregate = new AggregateLocation(markerId, key.lat, key.lng);
+            newAggregate.Locations.Add(location);
+            aggregatedMarkers[key] = newAggregate;
+            locationKeyIndex[location.Id] = key;
+
+            // Track by UserId for deduplication
+            if (!string.IsNullOrEmpty(location.UserId))
+            {
+                userLocationIndex[location.UserId] = location;
+            }
+
+            // Add to TourLocations
+            if (!TourLocations.ContainsKey(location.Id))
+            {
+                TourLocations.Add(location.Id, location);
+            }
+
+            await OnLocationPlotted.InvokeAsync(location);
+        }
+
+        // NEW: Queue announcement for new markers if feature is enabled
+        if (EnablePinAnnouncements && isNewMarker)
+        {
+            QueuePinAnnouncement(location);
         }
     }
 
@@ -477,6 +508,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             PendingLocationQueue.Clear();
             aggregatedMarkers.Clear();
             locationKeyIndex.Clear();
+            userLocationIndex.Clear();
             Console.WriteLine("Cleared all markers");
             StateHasChanged();
         }
@@ -654,11 +686,19 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
                    aggregatedMarkers.TryGetValue(key, out var aggregate))
         {
             var idx = aggregate.Locations.FindIndex(l => l.Id == locationId);
+            ViewerLocationEvent? removedLocation = null;
             if (idx >= 0)
             {
+                removedLocation = aggregate.Locations[idx];
                 aggregate.Locations.RemoveAt(idx);
             }
             locationKeyIndex.Remove(locationId);
+
+            // Also remove from user location index if this location had a UserId
+            if (removedLocation != null && !string.IsNullOrEmpty(removedLocation.Value.UserId))
+            {
+                userLocationIndex.Remove(removedLocation.Value.UserId);
+            }
 
             if (aggregate.Locations.Count == 0)
             {
@@ -734,6 +774,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             tourClusters.Clear();
             aggregatedMarkers.Clear();
             locationKeyIndex.Clear();
+            userLocationIndex.Clear();
             announcementQueue.Clear();
         }
         catch (Exception ex)
