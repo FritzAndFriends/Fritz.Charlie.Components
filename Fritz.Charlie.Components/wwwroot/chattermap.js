@@ -9,6 +9,7 @@ class ChatterMapManager {
         this.markerToIdMap = new Map(); // Reverse lookup - Leaflet marker -> ID for O(1) lookup
         this.allMarkerData = new Map(); // Store all marker data without adding to map
         this.visibleMarkers = new Set(); // Track currently visible markers
+        this.pendingMarkers = new Set(); // Track markers being added to prevent duplicates during async ops
         this.tourActive = false;
         this.tourStops = [];
         this.currentTourIndex = 0;
@@ -218,12 +219,19 @@ class ChatterMapManager {
             }
         }
 
-        // Add new markers in viewport - now with proper await and duplicate protection
+        // Add new markers in viewport - now with comprehensive duplicate protection
         for (const markerData of visibleMarkerData) {
-            if (!this.visibleMarkers.has(markerData.id) && !this.markers.has(markerData.id)) {
+            // Triple check: not visible, not already on map, not currently being added
+            if (!this.visibleMarkers.has(markerData.id) && 
+                !this.markers.has(markerData.id) && 
+                !this.pendingMarkers.has(markerData.id)) {
+                
                 const success = await this.addMarkerToMap(markerData);
                 if (success) {
                     this.visibleMarkers.add(markerData.id);
+                } else {
+                    // If addition failed, clean up pending state
+                    this.pendingMarkers.delete(markerData.id);
                 }
             }
         }
@@ -377,20 +385,25 @@ class ChatterMapManager {
     async addMarkerToMap(markerData) {
         const { id, lat, lng, userType, description, service, continentCode, count = 1 } = markerData;
 
-        // Check if marker already exists to prevent duplicates
-        if (this.markers.has(id)) {
-            console.log(`Marker ${id} already exists on map, skipping duplicate addition`);
+        // Check if marker already exists or is being added to prevent duplicates
+        if (this.markers.has(id) || this.pendingMarkers.has(id)) {
+            console.log(`Marker ${id} already exists or is being added, skipping duplicate addition`);
             return true;
         }
 
-        const clusterGroup = this.markerClusterGroups.get(continentCode);
-        if (!clusterGroup) {
-            console.error(`No cluster group found for continent ${continentCode}`);
-            return false;
-        }
+        // Mark as pending to prevent concurrent additions
+        this.pendingMarkers.add(id);
 
-        const iconUrl = await this.getIconUrl(userType, service);
-        const icon = this.createMarkerIcon(iconUrl, count, userType);
+        try {
+            const clusterGroup = this.markerClusterGroups.get(continentCode);
+            if (!clusterGroup) {
+                this.pendingMarkers.delete(id); // Clean up on error
+                console.error(`No cluster group found for continent ${continentCode}`);
+                return false;
+            }
+
+            const iconUrl = await this.getIconUrl(userType, service);
+            const icon = this.createMarkerIcon(iconUrl, count, userType);
 
         const marker = L.marker([lat, lng], {
             icon: icon,
@@ -423,11 +436,20 @@ class ChatterMapManager {
         // Maintain reverse lookup for O(1) cluster aggregation
         this.markerToIdMap.set(marker, id);
 
-        // Add to appropriate continent cluster group
-        clusterGroup.addLayer(marker);
+            // Add to appropriate continent cluster group
+            clusterGroup.addLayer(marker);
 
-        console.log(`Successfully added marker ${id} to map at ${lat}, ${lng}`);
-        return true;
+            // Remove from pending now that it's successfully added
+            this.pendingMarkers.delete(id);
+            
+            console.log(`Successfully added marker ${id} to map at ${lat}, ${lng}`);
+            return true;
+        } catch (error) {
+            // Clean up pending state on error
+            this.pendingMarkers.delete(id);
+            console.error(`Error adding marker ${id}:`, error);
+            return false;
+        }
     }
 
     // Create marker icon with optional count badge
@@ -807,10 +829,16 @@ top: 50%;
                 // Clean up reverse lookup
                 this.markerToIdMap.delete(marker);
 
+                // Clean up pending state if exists
+                this.pendingMarkers.delete(id);
+
                 console.log(`Removed marker ${id} from map and cluster group ${continentCode}`);
                 return true;
             }
         }
+        
+        // Clean up pending state even if marker wasn't found
+        this.pendingMarkers.delete(id);
         console.log(`Marker ${id} not found for removal or already removed`);
         return false;
     }
@@ -839,6 +867,7 @@ top: 50%;
             this.markers.clear();
             this.allMarkerData.clear();
             this.visibleMarkers.clear();
+            this.pendingMarkers.clear(); // Clear pending markers too
 
             // Clear reverse lookup
             this.markerToIdMap.clear();
@@ -1086,6 +1115,7 @@ top: 50%;
         this.markers.clear();
         this.allMarkerData.clear();
         this.visibleMarkers.clear();
+        this.pendingMarkers.clear();
         this.markerClusterGroups.clear();
 
         // Clear reverse lookup
