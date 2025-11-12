@@ -349,47 +349,6 @@ class ChatterMapManager {
         }
     }
 
-    // Zoom to a specific location with smooth animation (respecting max zoom)
-    zoomToLocation(lat, lng, zoom = 5) {
-        if (!this.map) return;
-
-        const currentMaxZoom = this.map.getMaxZoom();
-        const targetZoom = Math.min(zoom, currentMaxZoom); // Respect configurable max zoom
-        console.log(`Zooming to ${lat}, ${lng} at zoom level ${targetZoom} (max: ${currentMaxZoom})`);
-
-        this.map.flyTo([lat, lng], targetZoom, {
-            animate: true,
-            duration: 2.0,
-            easeLinearity: 0.25
-        });
-    }
-
-    // Get current max zoom level
-    getMaxZoom() {
-        return this.map ? this.map.getMaxZoom() : 6;
-    }
-
-    // Set new max zoom level (can be called after initialization)
-    setMaxZoom(maxZoom) {
-        if (this.map) {
-            this.map.setMaxZoom(maxZoom);
-            console.log(`Max zoom level updated to: ${maxZoom}`);
-            return true;
-        }
-        return false;
-    }
-
-    // Throttle viewport updates to prevent excessive recalculation during rapid map movements
-    throttleViewportUpdate() {
-        if (this.viewportUpdateThrottle) {
-            clearTimeout(this.viewportUpdateThrottle);
-        }
-
-        this.viewportUpdateThrottle = setTimeout(() => {
-            this.updateVisibleMarkers();
-        }, 150); // Wait 150ms after map movement stops
-    }
-
     // Internal method to add marker to the visible map (modified to support count)
     async addMarkerToMap(markerData) {
         const { id, lat, lng, userType, description, service, continentCode, count = 1 } = markerData;

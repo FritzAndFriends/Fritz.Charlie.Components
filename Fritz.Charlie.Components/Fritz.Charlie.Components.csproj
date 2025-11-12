@@ -21,7 +21,7 @@
   <PropertyGroup>
     <!-- NuGet package metadata (defaults; can be overridden by dotnet pack /p:... properties) -->
     <PackageId>Fritz.Charlie.Components</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Authors>Jeffrey T. Fritz</Authors>
     <Company>Fritz And Friends</Company>
     <Description>A collection of intelligent Blazor components for maps and location-based UI.</Description>
