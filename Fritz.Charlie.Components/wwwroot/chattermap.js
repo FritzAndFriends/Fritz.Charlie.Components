@@ -152,8 +152,29 @@ class ChatterMapManager {
         }
 
         this.viewportUpdateThrottle = setTimeout(() => {
+            this.validateMarkerState();
             this.updateVisibleMarkers();
         }, 150); // Wait 150ms after map movement stops
+    }
+
+    // Validate and clean up any inconsistent marker state
+    validateMarkerState() {
+        // Check for markers in visibleMarkers but not in markers (orphaned tracking)
+        for (const markerId of this.visibleMarkers) {
+            if (!this.markers.has(markerId)) {
+                console.warn(`Removing orphaned visible marker tracking for ${markerId}`);
+                this.visibleMarkers.delete(markerId);
+            }
+        }
+
+        // Check for markers in markers but not in visibleMarkers or allMarkerData (orphaned markers)
+        for (const [markerId, markerInfo] of this.markers) {
+            if (!this.allMarkerData.has(markerId)) {
+                console.warn(`Removing orphaned marker ${markerId} from map`);
+                this.removeMarkerFromMap(markerId);
+                this.visibleMarkers.delete(markerId);
+            }
+        }
     }
 
     // Update visible markers based on current viewport and zoom level
@@ -191,16 +212,19 @@ class ChatterMapManager {
         // Remove markers no longer in viewport
         for (const markerId of this.visibleMarkers) {
             if (!visibleMarkerData.find(m => m.id === markerId)) {
-                this.removeMarkerFromMap(markerId);
-                this.visibleMarkers.delete(markerId);
+                if (this.removeMarkerFromMap(markerId)) {
+                    this.visibleMarkers.delete(markerId);
+                }
             }
         }
 
-        // Add new markers in viewport - now with proper await
+        // Add new markers in viewport - now with proper await and duplicate protection
         for (const markerData of visibleMarkerData) {
-            if (!this.visibleMarkers.has(markerData.id)) {
-                await this.addMarkerToMap(markerData);
-                this.visibleMarkers.add(markerData.id);
+            if (!this.visibleMarkers.has(markerData.id) && !this.markers.has(markerData.id)) {
+                const success = await this.addMarkerToMap(markerData);
+                if (success) {
+                    this.visibleMarkers.add(markerData.id);
+                }
             }
         }
     }
@@ -335,8 +359,8 @@ class ChatterMapManager {
 
             this.allMarkerData.set(id, markerData);
 
-            // Only add to map if it would be visible in current viewport
-            if (this.map.getBounds().pad(0.1).contains([lat, lng])) {
+            // Only add to map if it would be visible in current viewport AND not already visible
+            if (this.map.getBounds().pad(0.1).contains([lat, lng]) && !this.visibleMarkers.has(id)) {
                 await this.addMarkerToMap({ id, ...markerData });
                 this.visibleMarkers.add(id);
             }
@@ -352,6 +376,12 @@ class ChatterMapManager {
     // Internal method to add marker to the visible map (modified to support count)
     async addMarkerToMap(markerData) {
         const { id, lat, lng, userType, description, service, continentCode, count = 1 } = markerData;
+
+        // Check if marker already exists to prevent duplicates
+        if (this.markers.has(id)) {
+            console.log(`Marker ${id} already exists on map, skipping duplicate addition`);
+            return true;
+        }
 
         const clusterGroup = this.markerClusterGroups.get(continentCode);
         if (!clusterGroup) {
@@ -395,6 +425,9 @@ class ChatterMapManager {
 
         // Add to appropriate continent cluster group
         clusterGroup.addLayer(marker);
+
+        console.log(`Successfully added marker ${id} to map at ${lat}, ${lng}`);
+        return true;
     }
 
     // Create marker icon with optional count badge
@@ -774,9 +807,11 @@ top: 50%;
                 // Clean up reverse lookup
                 this.markerToIdMap.delete(marker);
 
+                console.log(`Removed marker ${id} from map and cluster group ${continentCode}`);
                 return true;
             }
         }
+        console.log(`Marker ${id} not found for removal or already removed`);
         return false;
     }
 
