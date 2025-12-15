@@ -81,7 +81,7 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 			foreach (var (position, location, patternIndex) in potentialMatches)
 			{
 				var extractedLocation = location.AsSpan().Trim().TrimEnd(TrimChars);
-				var locationString = extractedLocation.ToString();
+				var locationString = CleanLocationSuffixes(extractedLocation.ToString());
 
 				// Try to preserve comma + state/country suffixes that were excluded by greedy lookaheads
 				try
@@ -143,7 +143,7 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 						if (IsValidLocationExtraction(extractedLocation))
 						{
 							// Convert to string only when we have a valid location
-							var locationString = extractedLocation.ToString();
+							var locationString = CleanLocationSuffixes(extractedLocation.ToString());
 
 							// Try to preserve comma + state/country suffixes that were excluded by greedy lookaheads
 							try
@@ -332,13 +332,11 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		// Consolidated greeting patterns - covers hello/hi/hey/greetings from, greetings and salutations from, good morning/afternoon/evening from
 		new(@"(?:h*hello|hi|hey|greetings|greetings and salutations|good morning|good afternoon|good evening)(?:\s+.*?)?\s+from\s+(?:the\s+)?([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|in|i'm|im)\b|[,.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
 		
-		// Flexible greeting pattern for misspellings - matches any word-like sequence ending in common greeting sounds followed by "from"
-		new(@"(?:h+[aeiou]*l+[aeiou]*|h+[aeiou]*y+|gr+[aeiou]*t+[ings]*)\s+from\s+(?:the\s+)?([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|in|i'm|im)\b|[,.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-		
-		// Current location patterns (common) - better word boundaries
-		new(@"(?:living in|residing in|based in|located in)\s+([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|now|today|these|right|because|since|with|for|in)\b|[.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-		new(@"(?:currently\s+(?:living|residing|based)\s+in)\s+([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|now|today|because|since|with|for|in)\b|[.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-		new(@"(?:now\s+(?:living|residing|based)\s+in)\s+([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|today|because|since|with|for|in)\b|[.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+	// "Good day/night" greeting patterns - captures "good day friends from Location" and similar
+	new(@"(?:good\s+day|good\s+night)(?:\s+\w+)?\s+from\s+(?:the\s+)?([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|in|i'm|im)\b|[,.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+	
+	// Flexible "good [anything] from" pattern - handles typos and variations in greetings that appear anywhere in message
+	new(@"(?:good\s+[a-z]{3,9}(?:ing)?)\s+from\s+(?:the\s+)?([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|in|i'm|im)\b|[,.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
 		
 		// Origin/born patterns - fixed word boundaries
 		new(@"(?:originally from|born in|grew up in|raised in|native of)\s+([a-zA-Z][\w\s,.''-]*?)(?=\s+(?:and|but|where|which|that|because|since|with|for|in)\b|[.;:\?!]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
@@ -385,6 +383,12 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	// Pre-allocated char array for trimming operations
 	private static readonly char[] TrimChars = ['.', ',', '!', '?', ';', ':'];
 
+	// Regex to strip common location suffixes (burbs, suburbs, area, metro)
+	private static readonly Regex LocationSuffixRegex = new(@"\s+(burbs|suburbs|area|metro)\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+	private static string CleanLocationSuffixes(string location)
+	{
+		return LocationSuffixRegex.Replace(location.Trim(), string.Empty).Trim();
+	}
 
 }
