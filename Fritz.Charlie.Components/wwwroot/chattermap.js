@@ -9,6 +9,7 @@ class ChatterMapManager {
         this.markerToIdMap = new Map(); // Reverse lookup - Leaflet marker -> ID for O(1) lookup
         this.allMarkerData = new Map(); // Store all marker data without adding to map
         this.visibleMarkers = new Set(); // Track currently visible markers
+        this.pendingMarkers = new Set(); // Track markers being added to prevent duplicates during async ops
         this.tourActive = false;
         this.tourStops = [];
         this.currentTourIndex = 0;
@@ -152,8 +153,29 @@ class ChatterMapManager {
         }
 
         this.viewportUpdateThrottle = setTimeout(() => {
+            this.validateMarkerState();
             this.updateVisibleMarkers();
         }, 150); // Wait 150ms after map movement stops
+    }
+
+    // Validate and clean up any inconsistent marker state
+    validateMarkerState() {
+        // Check for markers in visibleMarkers but not in markers (orphaned tracking)
+        for (const markerId of this.visibleMarkers) {
+            if (!this.markers.has(markerId)) {
+                console.warn(`Removing orphaned visible marker tracking for ${markerId}`);
+                this.visibleMarkers.delete(markerId);
+            }
+        }
+
+        // Check for markers in markers but not in visibleMarkers or allMarkerData (orphaned markers)
+        for (const [markerId, markerInfo] of this.markers) {
+            if (!this.allMarkerData.has(markerId)) {
+                console.warn(`Removing orphaned marker ${markerId} from map`);
+                this.removeMarkerFromMap(markerId);
+                this.visibleMarkers.delete(markerId);
+            }
+        }
     }
 
     // Update visible markers based on current viewport and zoom level
@@ -191,16 +213,26 @@ class ChatterMapManager {
         // Remove markers no longer in viewport
         for (const markerId of this.visibleMarkers) {
             if (!visibleMarkerData.find(m => m.id === markerId)) {
-                this.removeMarkerFromMap(markerId);
-                this.visibleMarkers.delete(markerId);
+                if (this.removeMarkerFromMap(markerId)) {
+                    this.visibleMarkers.delete(markerId);
+                }
             }
         }
 
-        // Add new markers in viewport - now with proper await
+        // Add new markers in viewport - now with comprehensive duplicate protection
         for (const markerData of visibleMarkerData) {
-            if (!this.visibleMarkers.has(markerData.id)) {
-                await this.addMarkerToMap(markerData);
-                this.visibleMarkers.add(markerData.id);
+            // Triple check: not visible, not already on map, not currently being added
+            if (!this.visibleMarkers.has(markerData.id) && 
+                !this.markers.has(markerData.id) && 
+                !this.pendingMarkers.has(markerData.id)) {
+                
+                const success = await this.addMarkerToMap(markerData);
+                if (success) {
+                    this.visibleMarkers.add(markerData.id);
+                } else {
+                    // If addition failed, clean up pending state
+                    this.pendingMarkers.delete(markerData.id);
+                }
             }
         }
     }
@@ -335,8 +367,8 @@ class ChatterMapManager {
 
             this.allMarkerData.set(id, markerData);
 
-            // Only add to map if it would be visible in current viewport
-            if (this.map.getBounds().pad(0.1).contains([lat, lng])) {
+            // Only add to map if it would be visible in current viewport AND not already visible
+            if (this.map.getBounds().pad(0.1).contains([lat, lng]) && !this.visibleMarkers.has(id)) {
                 await this.addMarkerToMap({ id, ...markerData });
                 this.visibleMarkers.add(id);
             }
@@ -349,59 +381,29 @@ class ChatterMapManager {
         }
     }
 
-    // Zoom to a specific location with smooth animation (respecting max zoom)
-    zoomToLocation(lat, lng, zoom = 5) {
-        if (!this.map) return;
-
-        const currentMaxZoom = this.map.getMaxZoom();
-        const targetZoom = Math.min(zoom, currentMaxZoom); // Respect configurable max zoom
-        console.log(`Zooming to ${lat}, ${lng} at zoom level ${targetZoom} (max: ${currentMaxZoom})`);
-
-        this.map.flyTo([lat, lng], targetZoom, {
-            animate: true,
-            duration: 2.0,
-            easeLinearity: 0.25
-        });
-    }
-
-    // Get current max zoom level
-    getMaxZoom() {
-        return this.map ? this.map.getMaxZoom() : 6;
-    }
-
-    // Set new max zoom level (can be called after initialization)
-    setMaxZoom(maxZoom) {
-        if (this.map) {
-            this.map.setMaxZoom(maxZoom);
-            console.log(`Max zoom level updated to: ${maxZoom}`);
-            return true;
-        }
-        return false;
-    }
-
-    // Throttle viewport updates to prevent excessive recalculation during rapid map movements
-    throttleViewportUpdate() {
-        if (this.viewportUpdateThrottle) {
-            clearTimeout(this.viewportUpdateThrottle);
-        }
-
-        this.viewportUpdateThrottle = setTimeout(() => {
-            this.updateVisibleMarkers();
-        }, 150); // Wait 150ms after map movement stops
-    }
-
     // Internal method to add marker to the visible map (modified to support count)
     async addMarkerToMap(markerData) {
         const { id, lat, lng, userType, description, service, continentCode, count = 1 } = markerData;
 
-        const clusterGroup = this.markerClusterGroups.get(continentCode);
-        if (!clusterGroup) {
-            console.error(`No cluster group found for continent ${continentCode}`);
-            return false;
+        // Check if marker already exists or is being added to prevent duplicates
+        if (this.markers.has(id) || this.pendingMarkers.has(id)) {
+            console.log(`Marker ${id} already exists or is being added, skipping duplicate addition`);
+            return true;
         }
 
-        const iconUrl = await this.getIconUrl(userType, service);
-        const icon = this.createMarkerIcon(iconUrl, count, userType);
+        // Mark as pending to prevent concurrent additions
+        this.pendingMarkers.add(id);
+
+        try {
+            const clusterGroup = this.markerClusterGroups.get(continentCode);
+            if (!clusterGroup) {
+                this.pendingMarkers.delete(id); // Clean up on error
+                console.error(`No cluster group found for continent ${continentCode}`);
+                return false;
+            }
+
+            const iconUrl = await this.getIconUrl(userType, service);
+            const icon = this.createMarkerIcon(iconUrl, count, userType);
 
         const marker = L.marker([lat, lng], {
             icon: icon,
@@ -434,8 +436,20 @@ class ChatterMapManager {
         // Maintain reverse lookup for O(1) cluster aggregation
         this.markerToIdMap.set(marker, id);
 
-        // Add to appropriate continent cluster group
-        clusterGroup.addLayer(marker);
+            // Add to appropriate continent cluster group
+            clusterGroup.addLayer(marker);
+
+            // Remove from pending now that it's successfully added
+            this.pendingMarkers.delete(id);
+            
+            console.log(`Successfully added marker ${id} to map at ${lat}, ${lng}`);
+            return true;
+        } catch (error) {
+            // Clean up pending state on error
+            this.pendingMarkers.delete(id);
+            console.error(`Error adding marker ${id}:`, error);
+            return false;
+        }
     }
 
     // Create marker icon with optional count badge
@@ -815,9 +829,17 @@ top: 50%;
                 // Clean up reverse lookup
                 this.markerToIdMap.delete(marker);
 
+                // Clean up pending state if exists
+                this.pendingMarkers.delete(id);
+
+                console.log(`Removed marker ${id} from map and cluster group ${continentCode}`);
                 return true;
             }
         }
+        
+        // Clean up pending state even if marker wasn't found
+        this.pendingMarkers.delete(id);
+        console.log(`Marker ${id} not found for removal or already removed`);
         return false;
     }
 
@@ -845,6 +867,7 @@ top: 50%;
             this.markers.clear();
             this.allMarkerData.clear();
             this.visibleMarkers.clear();
+            this.pendingMarkers.clear(); // Clear pending markers too
 
             // Clear reverse lookup
             this.markerToIdMap.clear();
@@ -1092,6 +1115,7 @@ top: 50%;
         this.markers.clear();
         this.allMarkerData.clear();
         this.visibleMarkers.clear();
+        this.pendingMarkers.clear();
         this.markerClusterGroups.clear();
 
         // Clear reverse lookup
