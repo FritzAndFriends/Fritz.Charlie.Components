@@ -2,6 +2,7 @@ using Fritz.Charlie.Common;
 using Fritz.Charlie.Components.Map;
 using Fritz.Charlie.Components.Models;
 using Fritz.Charlie.Components.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Fritz.Charlie.Components;
 
@@ -241,6 +242,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         while (announcementQueue.Count > 0 && !IsTourActive && !isUserNavigating)
         {
             isAnnouncementActive = true;
+						IsTourActive = true;
             var location = announcementQueue.Dequeue();
             currentAnnouncedLocation = location;
 
@@ -264,6 +266,9 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
 
         isAnnouncementActive = false;
+				IsTourActive = false;
+				await InvokeAsync(StateHasChanged);
+				
     }
 
     // NEW: Show pin announcement with celebration

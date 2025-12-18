@@ -117,6 +117,15 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 					continue; // Skip URLs and try next match
 				}
 
+				// Remove Twitch emotes and emoji characters
+				locationString = RemoveEmotes(locationString);
+				
+				// Validate we still have a location after cleaning
+				if (string.IsNullOrWhiteSpace(locationString) || locationString.Length < 2)
+				{
+					continue; // Try next match if cleaning removed everything
+				}
+
 				Logger.LogInformation($"Found location '{locationString}' from message: {message}");
 				return locationString;
 			}
@@ -178,7 +187,14 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 							{
 								continue; // Skip URLs and try next pattern
 							}
-
+						// Remove Twitch emotes and emoji characters
+						locationString = RemoveEmotes(locationString);
+						
+						// Validate we still have a location after cleaning
+						if (string.IsNullOrWhiteSpace(locationString) || locationString.Length < 2)
+						{
+							continue; // Try next pattern if cleaning removed everything
+						}
 							Logger.LogInformation($"Found location '{locationString}' from message: {message}");
 							return locationString;
 						}
@@ -386,9 +402,33 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	// Regex to strip common location suffixes (burbs, suburbs, area, metro)
 	private static readonly Regex LocationSuffixRegex = new(@"\s+(burbs|suburbs|area|metro)\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+	// Regex to detect Twitch emotes (typically camelCase starting with lowercase, or specific emote patterns)
+	// Matches patterns like: csharpGritty, LUL, Kappa, monkaS, 4Head, etc.
+	private static readonly Regex EmotePattern = new(@"\s+(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z]{2,}[a-z]*|\d+[A-Z][a-zA-Z]*|[a-z]+[A-Z]\d+)$", RegexOptions.Compiled);
+
+	// Regex to detect emoji and other special Unicode characters
+	private static readonly Regex EmojiPattern = new(@"[\p{So}\p{Sk}\p{Sm}\p{Sc}]+\s*$", RegexOptions.Compiled);
+
 	private static string CleanLocationSuffixes(string location)
 	{
 		return LocationSuffixRegex.Replace(location.Trim(), string.Empty).Trim();
+	}
+
+	/// <summary>
+	/// Removes Twitch emotes and emoji characters from the end of a location string
+	/// </summary>
+	private static string RemoveEmotes(string location)
+	{
+		if (string.IsNullOrWhiteSpace(location))
+			return location;
+
+		// Remove emojis and special Unicode characters
+		location = EmojiPattern.Replace(location, string.Empty).Trim();
+
+		// Remove Twitch emote patterns (camelCase words at the end)
+		location = EmotePattern.Replace(location, string.Empty).Trim();
+
+		return location;
 	}
 
 }
