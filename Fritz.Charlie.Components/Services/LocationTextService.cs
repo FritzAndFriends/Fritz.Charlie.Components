@@ -12,7 +12,13 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	/// </summary>
 	/// <param name="message">Text to analyze for a location</param>
 	/// <returns>Location, if any mentioned in the message.  Returns empty string if there is no location found</returns>
-	public string GetLocationText(string message)
+	/// <summary>
+	/// Extracts a location that was mentioned in the text provided with optional cache-first progressive truncation
+	/// </summary>
+	/// <param name="message">Text to analyze for a location</param>
+	/// <param name="cacheChecker">Optional function to check if a location exists in cache (for progressive truncation)</param>
+	/// <returns>Location, if any mentioned in the message. Returns empty string if there is no location found</returns>
+	public string GetLocationText(string message, Func<string, bool>? cacheChecker = null)
 	{
 
 		// Early exit for empty or very short messages
@@ -120,7 +126,19 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 					continue; // Skip URLs and try next match
 				}
 
-				// Remove Twitch emotes and emoji characters
+				// Apply progressive truncation if cache checker is available
+				if (cacheChecker != null)
+				{
+					var truncatedLocation = TryProgressiveTruncation(locationString, cacheChecker);
+					if (!string.IsNullOrEmpty(truncatedLocation))
+					{
+						Logger.LogInformation($"Found cached location '{truncatedLocation}' (truncated from '{locationString}') from message: {message}");
+						return truncatedLocation;
+					}
+					// If progressive truncation didn't find anything, continue with traditional cleaning
+				}
+
+				// Fallback to traditional emote removal if no cache checker or cache miss
 				locationString = RemoveEmotes(locationString);
 				
 				// Validate we still have a location after cleaning
@@ -199,7 +217,19 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 							{
 								continue; // Skip URLs and try next pattern
 							}
-						// Remove Twitch emotes and emoji characters
+						// Apply progressive truncation if cache checker is available
+						if (cacheChecker != null)
+						{
+							var truncatedLocation = TryProgressiveTruncation(locationString, cacheChecker);
+							if (!string.IsNullOrEmpty(truncatedLocation))
+							{
+								Logger.LogInformation($"Found cached location '{truncatedLocation}' (truncated from '{locationString}') from message: {message}");
+								return truncatedLocation;
+							}
+							// If progressive truncation didn't find anything, continue with traditional cleaning
+						}
+
+						// Fallback to traditional emote removal if no cache checker or cache miss
 						locationString = RemoveEmotes(locationString);
 						
 						// Validate we still have a location after cleaning
@@ -296,7 +326,7 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		"response", "system", "automated", "my", "on", "is", "are", "was",
 		"were", "be", "been", "have", "has", "had", "do", "does", "did",
 		"will", "would", "could", "should", "can", "may", "might", "must",
-		"hello", "hi", "hey", "content", "tutorial", "coding", "going"
+		"hello", "hi", "hey", "content", "tutorial", "coding", "going", "from"
 	};
 
 	private static bool IsValidLocationExtraction(ReadOnlySpan<char> location)
@@ -571,12 +601,32 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	// Regex to strip common location suffixes (burbs, suburbs, area, metro)
 	private static readonly Regex LocationSuffixRegex = new(@"\s+(burbs|suburbs|area|metro)\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-	// Regex to detect Twitch emotes (typically camelCase starting with lowercase, or specific emote patterns)
-	// Matches patterns like: csharpGritty, LUL, Kappa, monkaS, 4Head, etc.
-	private static readonly Regex EmotePattern = new(@"\s+(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z]{2,}[a-z]*|\d+[A-Z][a-zA-Z]*|[a-z]+[A-Z]\d+)$", RegexOptions.Compiled);
+	// Enhanced regex to detect Twitch emotes anywhere in the string (not just at end)
+	// Matches patterns like: csharpGritty, LUL, Kappa, monkaS, 4Head, PogChamp, etc.
+	private static readonly Regex EmotePattern = new(@"\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z]{2,}[a-z]*|\d+[A-Z][a-zA-Z]*|[a-z]+[A-Z]\d*|[A-Z][a-z]+[A-Z][a-z]*|[a-z]+[0-9]+[A-Z][a-z]*|[A-Z]+\d+)\b", RegexOptions.Compiled);
 
-	// Regex to detect emoji and other special Unicode characters
-	private static readonly Regex EmojiPattern = new(@"[\p{So}\p{Sk}\p{Sm}\p{Sc}]+\s*$", RegexOptions.Compiled);
+	// Enhanced regex to detect emoji and Unicode symbols anywhere in the string  
+	// Uses proper .NET Unicode escape syntax for emoji ranges
+	private static readonly Regex EmojiPattern = new(@"[\p{So}\p{Sk}\p{Sm}\p{Sc}\p{Cn}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u26FF]|[\u2700-\u27BF]|[\uFE0E\uFE0F]", RegexOptions.Compiled);
+
+	// Common Twitch emote names for additional detection
+	private static readonly HashSet<string> CommonTwitchEmotes = new(StringComparer.OrdinalIgnoreCase)
+	{
+		"4head", "lul", "kappa", "pogchamp", "monkas", "pepehands", "sadge", "omegalul",
+		"pepega", "5head", "weirdchamp", "pepelaugh", "kekw", "copium", "hopium", "malding",
+		"pog", "poggers", "ez", "clap", "ez clap", "gg", "wp", "rip", "f", "w", "l", "ratio", "based",
+		"cringe", "sus", "cap", "nocap", "fr", "ong", "bet", "say", "less", "sheesh",
+		"bussin", "salty", "toxic", "griefing", "throwing", "inting", "feed", "feeding",
+		"csharpgritty", "csharpfritz", "dotnetbot", "visualstudio", "blazor", "aspnet",
+		"pepehappy", "pepesad", "pepesmile", "pepe", "monka", "feelsbad", "feelsgood",
+		"feelsbadman", "feelsgoodman", "pepeweird", "pepepls", "pepejam", "widehappy",
+		"widepeepohappy", "modcheck", "noted", "surely", "copege", "despair"
+	};
+
+	// Multi-word emote patterns that should be detected together
+	private static readonly string[] MultiWordEmotes = [
+		"ez clap", "5 head", "big brain", "smooth brain", "no cap", "on god"
+	];
 
 	private static string CleanLocationSuffixes(string location)
 	{
@@ -633,20 +683,170 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	}
 
 	/// <summary>
-	/// Removes Twitch emotes and emoji characters from the end of a location string
+	/// Removes Twitch emotes and emoji characters from location strings using multiple cleaning passes
 	/// </summary>
 	private static string RemoveEmotes(string location)
 	{
 		if (string.IsNullOrWhiteSpace(location))
 			return location;
 
-		// Remove emojis and special Unicode characters
-		location = EmojiPattern.Replace(location, string.Empty).Trim();
+		var cleaned = location.Trim();
 
-		// Remove Twitch emote patterns (camelCase words at the end)
-		location = EmotePattern.Replace(location, string.Empty).Trim();
+		// Pass 1: Remove Unicode emojis and symbols
+		cleaned = EmojiPattern.Replace(cleaned, " ").Trim();
 
-		return location;
+		// Pass 2: Remove Twitch emote patterns
+		cleaned = EmotePattern.Replace(cleaned, " ").Trim();
+
+		// Pass 3: Remove known Twitch emote names
+		cleaned = RemoveKnownEmotes(cleaned);
+
+		// Pass 4: Clean up multiple spaces and re-trim
+		cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s+", " ").Trim();
+
+		// Pass 5: Remove any remaining isolated single characters or numbers that might be emote fragments
+		cleaned = RemoveEmoteFragments(cleaned);
+
+		// Pass 6: Final validation - reject if only invalid words remain
+		if (!string.IsNullOrWhiteSpace(cleaned))
+		{
+			var remainingWords = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+			var hasValidLocationWord = false;
+			
+			foreach (var word in remainingWords)
+			{
+				var cleanWord = word.Trim('.', ',', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}').ToLowerInvariant();
+				if (!InvalidTerms.Contains(cleanWord) && !CommonTwitchEmotes.Contains(cleanWord))
+				{
+					hasValidLocationWord = true;
+					break;
+				}
+			}
+			
+			if (!hasValidLocationWord)
+			{
+				return string.Empty; // No valid location words remain after emote cleaning
+			}
+		}
+
+		// Final cleanup
+		return cleaned.Trim();
+	}
+
+	/// <summary>
+	/// Removes known Twitch emote names from the location string
+	/// </summary>
+	private static string RemoveKnownEmotes(string location)
+	{
+		if (string.IsNullOrWhiteSpace(location))
+			return location;
+
+		var cleaned = location;
+
+		// First pass: Remove multi-word emotes
+		foreach (var multiEmote in MultiWordEmotes)
+		{
+			cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, 
+				$@"\b{Regex.Escape(multiEmote)}\b", " ", RegexOptions.IgnoreCase);
+		}
+
+		// Second pass: Remove single-word emotes
+		var words = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+		var cleanedWords = new List<string>();
+
+		foreach (var word in words)
+		{
+			// Clean word of punctuation for checking
+			var cleanWord = word.Trim('.', ',', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}');
+			
+			// Skip if it's a known emote
+			if (!CommonTwitchEmotes.Contains(cleanWord))
+			{
+				cleanedWords.Add(word);
+			}
+		}
+
+		return string.Join(" ", cleanedWords).Trim();
+	}
+
+	/// <summary>
+	/// Removes isolated single characters, numbers, or obvious emote fragments
+	/// </summary>
+	private static string RemoveEmoteFragments(string location)
+	{
+		if (string.IsNullOrWhiteSpace(location))
+			return location;
+
+		var words = location.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+		var cleanedWords = new List<string>();
+
+		foreach (var word in words)
+		{
+			// Clean word of punctuation for analysis
+			var cleanWord = word.Trim('.', ',', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}');
+			
+			// Skip single characters, isolated numbers, or very short non-alphabetic sequences
+			if (cleanWord.Length == 1 || 
+			    (cleanWord.Length <= 2 && cleanWord.All(char.IsDigit)) ||
+			    (cleanWord.Length <= 3 && cleanWord.Any(c => !char.IsLetter(c) && !char.IsWhiteSpace(c))))
+			{
+				// Skip potential emote fragments
+				continue;
+			}
+			
+			cleanedWords.Add(word);
+		}
+
+		return string.Join(" ", cleanedWords);
+	}
+
+	/// <summary>
+	/// Progressive truncation strategy: tries cache lookups from full location down to individual words.
+	/// This allows fast cache hits for known locations while handling emotes/noise gracefully.
+	/// </summary>
+	/// <param name="location">Extracted location that may contain emotes or noise</param>
+	/// <param name="cacheChecker">Function to check if a location exists in cache</param>
+	/// <returns>Validated location from cache, or empty string if no cached match found</returns>
+	private string TryProgressiveTruncation(string location, Func<string, bool> cacheChecker)
+	{
+		if (string.IsNullOrWhiteSpace(location))
+			return string.Empty;
+
+		// Split into words and try progressively shorter combinations
+		var words = location.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+		
+		// Try from longest to shortest (right-to-left truncation to remove trailing emotes)
+		for (int i = words.Length; i > 0; i--)
+		{
+			var candidate = string.Join(" ", words.Take(i)).Trim();
+			
+			// Skip very short candidates
+			if (candidate.Length < 2)
+				continue;
+			
+			// Skip if it would fail basic validation
+			if (!IsValidLocationExtraction(candidate.AsSpan()))
+				continue;
+			
+			// Check cache - this is the key optimization
+			try 
+			{
+				if (cacheChecker(candidate))
+				{
+					Logger.LogDebug($"Progressive truncation cache hit: '{candidate}' (from '{location}')");
+					return candidate;
+				}
+			}
+			catch (Exception ex)
+			{
+				Logger.LogWarning(ex, $"Error checking cache for candidate: {candidate}");
+				// Continue trying other candidates
+			}
+		}
+		
+		// No cached matches found
+		Logger.LogDebug($"Progressive truncation found no cached matches for: {location}");
+		return string.Empty;
 	}
 
 }

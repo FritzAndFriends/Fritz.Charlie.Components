@@ -139,7 +139,16 @@ public class LocationTests
             { "from Seattle!", "seattle" },
             { "Hello from Denver?", "denver" },
             { "from Miami; great city", "miami" },
-            { "I'm from Portland: love it here", "portland" }
+            { "I'm from Portland: love it here", "portland" },
+            
+            // Cases with Twitch emotes and emojis - should be cleaned
+            { "Hello from Seattle LUL", "seattle" },
+            { "I'm from Boston Kappa", "boston" },
+            { "from Chicago PogChamp", "chicago" },
+            { "visiting Miami csharpGritty", "miami" },
+            { "Hello from Denver 4Head", "denver" }, // Simplified - removed conflicting location
+            { "I'm from New York EZ Clap", "new york" },
+            { "from Portland Sadge", "portland" } // Simplified - removed conflicting location
         };
 
     public static TheoryData<string> InvalidLocationExtractionTestData =>
@@ -186,7 +195,16 @@ public class LocationTests
             { "from home" },
             { "I'm here" },
             { "currently there" },
-            { "visiting this place" }
+            { "visiting this place" },
+            
+            // Emotes/emojis alone should not be detected as locations
+            { "LUL" },
+            { "Kappa" },
+            { "PogChamp" },
+            { "csharpGritty" },
+            { "4Head" },
+            { "from LUL" },
+            { "visiting Kappa" }
         };
 
     [Theory]
