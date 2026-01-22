@@ -83,6 +83,9 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 				var extractedLocation = location.AsSpan().Trim().TrimEnd(TrimChars);
 				var locationString = CleanLocationSuffixes(extractedLocation.ToString());
 
+				// Apply post-processing cleanup to remove prefixes and action words
+				locationString = CleanExtractedLocation(locationString);
+
 				// Try to preserve comma + state/country suffixes that were excluded by greedy lookaheads
 				try
 				{
@@ -125,6 +128,12 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 				{
 					continue; // Try next match if cleaning removed everything
 				}
+				
+				// Final validation check after all post-processing
+				if (!IsValidLocationExtraction(locationString.AsSpan()))
+				{
+					continue; // Try next match if validation fails
+				}
 
 				Logger.LogInformation($"Found location '{locationString}' from message: {message}");
 				return locationString;
@@ -153,6 +162,9 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 						{
 							// Convert to string only when we have a valid location
 							var locationString = CleanLocationSuffixes(extractedLocation.ToString());
+
+							// Apply post-processing cleanup to remove prefixes and action words
+							locationString = CleanExtractedLocation(locationString);
 
 							// Try to preserve comma + state/country suffixes that were excluded by greedy lookaheads
 							try
@@ -195,8 +207,15 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 						{
 							continue; // Try next pattern if cleaning removed everything
 						}
-							Logger.LogInformation($"Found location '{locationString}' from message: {message}");
-							return locationString;
+						
+						// Final validation check after all post-processing
+						if (!IsValidLocationExtraction(locationString.AsSpan()))
+						{
+							continue; // Try next pattern if validation fails
+						}
+						
+						Logger.LogInformation($"Found location '{locationString}' from message: {message}");
+						return locationString;
 						}
 					}
 				}
@@ -214,9 +233,10 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	[
 		"from", "in", "at", "live", "born", "based", "residing", "located",
 		"visiting", "vacation", "traveling", "represent", "here", "cold",
-		"hot", "weather", "degrees", "timezone", "morning", "evening",
+		"hot", "weather", "degrees", "timezone", "morning", "evening", "mornin",
 		"cafe", "restaurant", "store", "shop", "hotel", "st.", "st", "home",
-		"park", "state", "national", "forest", "preserve", "recreation", "near"
+		"park", "state", "national", "forest", "preserve", "recreation", "near",
+		"city", "mo", "fl", "ca", "tx", "ny", "il", "oh", "pa", "mi", "ga", "nc", "va"
 	];
 
 	private static bool ContainsLocationIndicators(string message)
@@ -227,6 +247,35 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 			if (message.Contains(keyword, StringComparison.OrdinalIgnoreCase))
 				return true;
 		}
+		
+		// For very short messages (potential standalone locations), check if it looks like a location
+		// This handles cases like "Mexico City" without any keywords
+		if (message.Trim().Length <= 30 && message.Trim().Split(' ').Length <= 3)
+		{
+			// Check if it starts with capital letters (likely location format)
+			var trimmed = message.Trim();
+			if (trimmed.Length >= 2 && char.IsUpper(trimmed[0]))
+			{
+				var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+				if (words.Length >= 1 && words.Length <= 3)
+				{
+					// Check if all words start with capitals and are reasonable length
+					var allCapitalized = true;
+					foreach (var word in words)
+					{
+						// Clean word of punctuation for checking
+						var cleanWord = word.TrimEnd('.', ',', '!', '?', ';', ':');
+						if (cleanWord.Length < 2 || !char.IsUpper(cleanWord[0]) || InvalidTerms.Contains(cleanWord.ToLowerInvariant()))
+						{
+							allCapitalized = false;
+							break;
+						}
+					}
+					if (allCapitalized) return true;
+				}
+			}
+		}
+		
 		return false;
 	}
 
@@ -243,7 +292,11 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		"cafe", "restaurant", "store", "shop", "hotel", "its", "it's",
 		"work", "home", "friends", "place", "moment", "stream", "bot",
 		"server", "github", "http", "https", "localhost", "com", "org",
-		"week", "month", "year", "i'm", "im", "in"
+		"week", "month", "year", "i'm", "im", "in", "experience", "message",
+		"response", "system", "automated", "my", "on", "is", "are", "was",
+		"were", "be", "been", "have", "has", "had", "do", "does", "did",
+		"will", "would", "could", "should", "can", "may", "might", "must",
+		"hello", "hi", "hey", "content", "tutorial", "coding", "going"
 	};
 
 	private static bool IsValidLocationExtraction(ReadOnlySpan<char> location)
@@ -254,6 +307,58 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		// Trim and clean the location
 		location = location.Trim();
 
+		// Quick contextual phrase rejection for common false positives
+		var locationStr = location.ToString().ToLowerInvariant();
+		
+		// Reject obvious non-location phrases
+		string[] falsePositivePhrases = [
+			"the stream", "the weather", "the weather is nice", "the good place",
+			"my experience", "on my experience", "system message", "automated response",
+			"response from server", "message from bot", "from the stream",
+			"from home", "good place", "this place", "that place", "some place",
+			"any place", "one place", "nice place", "great place", "bad place",
+			"the place", "a place", "the moment", "this moment", "that moment",
+			"the time", "good time", "great time", "nice time", "bad time",
+			"the weather is", "weather is nice", "weather is good", "weather is great"
+		];
+		
+		foreach (var phrase in falsePositivePhrases)
+		{
+			if (locationStr == phrase || locationStr.Contains(phrase))
+				return false;
+		}
+		
+		// Reject single words that are clearly not locations
+		if (!locationStr.Contains(' ') && locationStr.Length <= 10)
+		{
+			string[] singleWordRejects = [
+				"friends", "experience", "message", "response", "system", "automated",
+				"weather", "stream", "content", "tutorial", "coding", "going",
+				"everyone", "hello", "thanks", "love", "nice", "great", "good"
+			];
+			
+			if (singleWordRejects.Contains(locationStr))
+				return false;
+		}
+
+		// Additional check for single invalid words using the InvalidTerms set
+		if (!locationStr.Contains(' '))
+		{
+			// For single words, be more strict about InvalidTerms checking
+			if (InvalidTerms.Contains(locationStr))
+				return false;
+				
+			// Also check the single word rejects list
+			string[] singleWordRejects = [
+				"friends", "experience", "message", "response", "system", "automated",
+				"weather", "stream", "content", "tutorial", "coding", "going",
+				"everyone", "hello", "thanks", "love", "nice", "great", "good"
+			];
+			
+			if (singleWordRejects.Contains(locationStr))
+				return false;
+		}
+
 		// Check for common false positives at the start
 		if (location.StartsWith("the ", StringComparison.OrdinalIgnoreCase))
 		{
@@ -263,8 +368,8 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		if (location.Length < 2) return false;
 
 		// Check if it looks like a URL
-		var locationStr = location.ToString();
-		if (Uri.TryCreate(locationStr, UriKind.Absolute, out _))
+		var locationString = location.ToString();
+		if (Uri.TryCreate(locationString, UriKind.Absolute, out _))
 		{
 			return false;
 		}
@@ -273,7 +378,7 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		if (!location.Contains(' ') && location.Length < 4)
 		{
 			// For single short words, check if they're common invalid terms
-			if (InvalidTerms.Contains(locationStr))
+			if (InvalidTerms.Contains(locationString))
 				return false;
 		}
 
@@ -322,6 +427,58 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		var locStrLow = location.ToString().ToLowerInvariant();
 		if (locStrLow.Contains("temperature") || locStrLow.Contains("sun") || locStrLow.Contains("degrees") || locStrLow.Contains("fahrenheit") || locStrLow.Contains("celsius"))
 			return false;
+
+		// Additional sentence-like structure detection
+		// Reject if it contains too many common English words that suggest it's a sentence, not a location
+		// But be more permissive with "the" as it's common in location names
+		string[] sentenceIndicators = ["is", "are", "was", "were", "a", "an", "my", "your", "his", "her", "our", "their"];
+		var sentenceWordCount = 0;
+		var totalWords = wordCount;
+		
+		foreach (var indicator in sentenceIndicators)
+		{
+			if (locStrLow.Contains($" {indicator} ") || locStrLow.StartsWith($"{indicator} ") || locStrLow.EndsWith($" {indicator}"))
+			{
+				sentenceWordCount++;
+			}
+		}
+		
+		// Special case: allow "the" in location names like "The Democratic Republic of the Congo"
+		// Only count "the" as sentence indicator if it appears multiple times or with other indicators
+		var theCount = 0;
+		var theIndex = locStrLow.IndexOf(" the ");
+		while (theIndex >= 0)
+		{
+			theCount++;
+			theIndex = locStrLow.IndexOf(" the ", theIndex + 1);
+		}
+		if (locStrLow.StartsWith("the ")) theCount++;
+		if (locStrLow.EndsWith(" the")) theCount++;
+		
+		// Only penalize "the" if it appears with other sentence indicators or multiple times inappropriately
+		if (theCount > 0 && sentenceWordCount == 0 && theCount <= 2)
+		{
+			// Allow "the" in location names
+		}
+		else if (theCount > 0)
+		{
+			sentenceWordCount += Math.Min(theCount, 2); // Cap penalty from "the"
+		}
+		
+		// If more than 35% of the text consists of sentence structure words, likely not a location  
+		// Increased threshold to be more permissive of location names with "the"
+		if (totalWords > 2 && sentenceWordCount > 0 && (double)sentenceWordCount / totalWords > 0.35)
+			return false;
+		
+		// Reject extractions that look like full sentences (contain verbs + articles)
+		// But be more lenient with longer location names
+		if (wordCount > 4 && (
+		    (locStrLow.Contains(" is ") || locStrLow.Contains(" are ") || locStrLow.Contains(" was ") || locStrLow.Contains(" were ")) ||
+		    (locStrLow.Contains(" the ") && wordCount > 5 && sentenceWordCount > 1)
+		    ))
+		{
+			return false;
+		}
 
 		return true;
 	}
@@ -393,7 +550,19 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 		// Simple "from" pattern - covers 'from St. Petersburg, FL' and similar
 		new(@"^\s*from\s+([a-zA-Z][a-zA-Z0-9\s,.''-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
 		// Variant to handle time-of-day greetings like 'Morning from Virginia' or 'hello from Virginia Beach, happy Tuesday'
-		new(@"(?:^|\b)(?:good\s+)?(?:morning|afternoon|evening)\s+from\s+([a-zA-Z][a-zA-Z0-9\s'.-]*?)(?=[,.;:\?!]|\s+where|\s+who|\s+what|\s+when|\s+why|\s+how|\s+we\s+are|\s+it's|\s+im|\s+and|\s+but|\s+or|\s+so|\s+because|\s+since|\s+with|\s+for|\s+is|\s+are|\s+was|\s+were|\s+am|\s+be|\s+have|\s+has|\s+had|\s+will|\s+shall|\s+can|\s+may|\s+should|\s+would|\s+could|\s+must|\s+do|\s+does|\s+did|\s+not|\s+no|\s+yes|\s+in|\s*$)", RegexOptions.Compiled | RegexOptions.IgnoreCase)
+		new(@"(?:^|\b)(?:good\s+)?(?:morning|afternoon|evening)\s+from\s+([a-zA-Z][a-zA-Z0-9\s'.-]*?)(?=[,.;:\?!]|\s+where|\s+who|\s+what|\s+when|\s+why|\s+how|\s+we\s+are|\s+it's|\s+im|\s+and|\s+but|\s+or|\s+so|\s+because|\s+since|\s+with|\s+for|\s+is|\s+are|\s+was|\s+were|\s+am|\s+be|\s+have|\s+has|\s+had|\s+will|\s+shall|\s+can|\s+may|\s+should|\s+would|\s+could|\s+must|\s+do|\s+does|\s+did|\s+not|\s+no|\s+yes|\s+in|\s*$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+		
+		// Catch-all "from" pattern - captures any reasonable location after "from" keyword (added as lower priority)
+		new(@"\bfrom\s+([a-zA-Z][a-zA-Z0-9\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|in|i'm|im|this|we|have|are|love|enjoy|get|got|is|was|were)\b|[.;:\?!,]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+		
+		// Catch-all "in" pattern - captures any reasonable location after "in" keyword (for cases like "living in Nashville")
+		new(@"\b(?:living|residing|based|located|currently|now)\s+in\s+([a-zA-Z][a-zA-Z0-9\s,.''-]*?)(?=\s+(?:and|but|where|which|that|it|its|it's|the|a|an|here|today|now|because|since|with|for|i'm|im|this|we|have|are|love|enjoy|get|got|is|was|were)\b|[.;:\?!,]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+		
+		// Time-based greetings without "from" - like "top of the mornin. Kansas City, MO!"
+		new(@"(?:top\s+(?:of\s+)?the\s+(?:mornin|morning))[^a-zA-Z]*([A-Z][a-zA-Z\s,.''-]+?)(?:[.!?]|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+		
+		// Standalone location pattern - captures 1-4 capitalized words that could be location names (lowest priority)
+		new(@"^([A-Z][a-zA-Z]+(?:[,\s]+[A-Z][a-zA-Z]+){0,3})(?:[,.]*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase)
 	];
 
 	// Pre-allocated char array for trimming operations
@@ -412,6 +581,55 @@ public class LocationTextService(ILogger<LocationTextService> Logger)
 	private static string CleanLocationSuffixes(string location)
 	{
 		return LocationSuffixRegex.Replace(location.Trim(), string.Empty).Trim();
+	}
+
+	/// <summary>
+	/// Cleans extracted location by removing common prefixes and action words that shouldn't be part of location names
+	/// </summary>
+	private static string CleanExtractedLocation(string location)
+	{
+		if (string.IsNullOrWhiteSpace(location))
+			return string.Empty;
+
+		// Remove common prefixes that shouldn't be part of location names
+		var prefixesToRemove = new[]
+		{
+			"living in ", "based in ", "residing in ", "located in ", "currently in ",
+			"now living in ", "currently living in ", "now in ", "currently ", "living ", 
+			"residing ", "based ", "located ", "from the ", "in the ", "at the ", 
+			"visiting ", "traveling to ", "heading to ", "going to ", "staying in ", 
+			"working in ", "studying in ", "born in ", "raised in ", "grew up in ", 
+			"here in "
+		};
+
+		var cleaned = location.Trim();
+		
+		foreach (var prefix in prefixesToRemove)
+		{
+			if (cleaned.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+			{
+				cleaned = cleaned.Substring(prefix.Length).Trim();
+				break; // Only remove first matching prefix
+			}
+		}
+
+		// Additional cleanup - remove single words that are clearly not locations
+		var words = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+		if (words.Length == 1)
+		{
+			var singleWord = words[0].ToLowerInvariant();
+			string[] invalidSingleWords = [
+				"home", "work", "school", "office", "house", "apartment", "hotel",
+				"living", "based", "located", "residing", "traveling", "heading",
+				"going", "staying", "working", "studying", "visiting", "stream",
+				"hello", "here", "there", "somewhere", "anywhere", "everywhere"
+			];
+
+			if (invalidSingleWords.Contains(singleWord))
+				return string.Empty;
+		}
+
+		return cleaned;
 	}
 
 	/// <summary>

@@ -28,6 +28,11 @@ public class LocationTests
             // Additional test case for complex sentence with "I'm" as stop word
             { "Hello from Las Vegas I'm always one of the early people that lurk in here from the west coast", "las vegas" },
             
+            // New test cases requested (2026-01-22)
+            { "ahoy hoy from Miami, FL", "miami, fl" },
+            { "top of the mornin. Kansas City, MO!", "kansas city, mo" },
+            { "Mexico City, Mexico", "mexico city, mexico" },
+            
             // Test cases for "in" as stop word
             { "greetings from Melbourne in a hospital somewhere", "melbourne" },
             { "Hello from Chicago in the downtown area", "chicago" },
