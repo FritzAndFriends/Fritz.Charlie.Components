@@ -37,6 +37,15 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     private DotNetObjectReference<ChatterMapDirect>? dotNetObjectRef;
     private List<ClusterGroup> tourClusters = new();
 
+    // External tour grouping support - allows caller to provide AI-powered grouping
+    [Parameter] public Func<IEnumerable<ViewerLocationEvent>, Task<IEnumerable<ExternalTourGroup>>>? OnTourGroupRequested { get; set; }
+    
+    // Event to listen for external tour restart requests
+    [Parameter] public EventCallback OnTourRestartRequested { get; set; }
+    
+    // External tour groups when using OnTourGroupRequested
+    private List<ExternalTourGroup> externalTourGroups = new();
+
     // NEW: Aggregation structures
     private readonly Dictionary<(double lat, double lng), AggregateLocation> aggregatedMarkers = new();
     private readonly Dictionary<Guid, (double lat, double lng)> locationKeyIndex = new();
@@ -348,47 +357,89 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
                 locationsList = locationsList.Take(200).ToList();
             }
 
-            // Use the tour service to generate clusters
-            tourClusters = TourService.GenerateClusters(locationsList);
+            object[] tourStops;
 
-            // Log clustering results
-            Console.WriteLine($"Generated {tourClusters.Count} clusters from {locationsList.Count} locations");
-            foreach (var cluster in tourClusters)
+            // Check if external tour grouping is available (e.g., TourGroupingService with AI region names)
+            if (OnTourGroupRequested != null)
             {
-                Console.WriteLine($"  Cluster: {cluster.Count} locations, center ({cluster.CenterLatitude:F2}, {cluster.CenterLongitude:F2}), avg distance: {cluster.AverageDistanceFromCenter:F0}km");
-            }
+                Console.WriteLine($"Using external tour grouping for {locationsList.Count} locations");
+                var externalGroups = await OnTourGroupRequested(locationsList);
+                externalTourGroups = externalGroups.ToList();
 
-            // Use the tour service to arrange clusters
-            var arrangedClusters = TourService.ArrangeClustersByDistance(tourClusters);
-
-            if (arrangedClusters.Count > 15)
-            {
-                arrangedClusters = arrangedClusters.Take(15).ToList();
-            }
-
-            var tourStops = arrangedClusters.Select(cluster => new
-            {
-                lat = Math.Round(cluster.CenterLatitude, 6),
-                lng = Math.Round(cluster.CenterLongitude, 6),
-                zoom = TourService.DetermineZoomLevel(cluster, MaxZoom),
-                description = TourService.GetLocationDescription(cluster),
-                locationCount = cluster.Locations.Count,
-                locations = cluster.Locations.Take(10).Select(loc => new
+                Console.WriteLine($"External grouping returned {externalTourGroups.Count} groups");
+                foreach (var group in externalTourGroups)
                 {
-                    description = Truncate(loc.LocationDescription, 50),
-                    lat = Math.Round((double)loc.Latitude, 6),
-                    lng = Math.Round((double)loc.Longitude, 6),
-                    userType = loc.UserType,
-                    service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
-                }).ToArray()
-            }).ToArray();
+                    Console.WriteLine($"  Group: {group.RegionName} - {group.LocationCount} locations, zoom {group.OptimalZoomLevel}");
+                }
+
+                if (externalTourGroups.Count > 15)
+                {
+                    externalTourGroups = externalTourGroups.Take(15).ToList();
+                }
+
+                tourStops = externalTourGroups.Select(group => new
+                {
+                    lat = Math.Round(group.CenterLatitude, 6),
+                    lng = Math.Round(group.CenterLongitude, 6),
+                    zoom = Math.Min(group.OptimalZoomLevel, MaxZoom),
+                    description = group.RegionName,
+                    locationCount = group.LocationCount,
+                    locations = group.Locations.Take(10).Select(loc => new
+                    {
+                        description = Truncate(loc.LocationDescription, 50),
+                        lat = Math.Round((double)loc.Latitude, 6),
+                        lng = Math.Round((double)loc.Longitude, 6),
+                        userType = loc.UserType,
+                        service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
+                    }).ToArray()
+                }).ToArray();
+
+                // Clear internal clusters since we're using external groups
+                tourClusters.Clear();
+            }
+            else
+            {
+                // Use the built-in tour service to generate clusters
+                tourClusters = TourService.GenerateClusters(locationsList);
+
+                // Log clustering results
+                Console.WriteLine($"Generated {tourClusters.Count} clusters from {locationsList.Count} locations");
+                foreach (var cluster in tourClusters)
+                {
+                    Console.WriteLine($"  Cluster: {cluster.Count} locations, center ({cluster.CenterLatitude:F2}, {cluster.CenterLongitude:F2}), avg distance: {cluster.AverageDistanceFromCenter:F0}km");
+                }
+
+                // Use the tour service to arrange clusters
+                var arrangedClusters = TourService.ArrangeClustersByDistance(tourClusters);
+
+                if (arrangedClusters.Count > 15)
+                {
+                    arrangedClusters = arrangedClusters.Take(15).ToList();
+                }
+
+                tourStops = arrangedClusters.Select(cluster => new
+                {
+                    lat = Math.Round(cluster.CenterLatitude, 6),
+                    lng = Math.Round(cluster.CenterLongitude, 6),
+                    zoom = TourService.DetermineZoomLevel(cluster, MaxZoom),
+                    description = TourService.GetLocationDescription(cluster),
+                    locationCount = cluster.Locations.Count,
+                    locations = cluster.Locations.Take(10).Select(loc => new
+                    {
+                        description = Truncate(loc.LocationDescription, 50),
+                        lat = Math.Round((double)loc.Latitude, 6),
+                        lng = Math.Round((double)loc.Longitude, 6),
+                        userType = loc.UserType,
+                        service = loc.Service == "YouTube" ? "YouTube" : "Twitch"
+                    }).ToArray()
+                }).ToArray();
+
+                // Clear external groups since we're using internal clustering
+                externalTourGroups.Clear();
+            }
 
             // Log tour stops with zoom levels
-            Console.WriteLine($"Tour will visit {tourStops.Length} stops:");
-            for (int i = 0; i < tourStops.Length; i++)
-            {
-                Console.WriteLine($"  Stop {i + 1}: {tourStops[i].description} - {tourStops[i].locationCount} locations, zoom level {tourStops[i].zoom}");
-            }
+            Console.WriteLine($"Tour will visit {tourStops.Length} stops");
 
             await mapModule.InvokeVoidAsync("startTour", (object)tourStops);
             IsTourActive = true;
@@ -434,16 +485,35 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
     {
         try
         {
-            if (isActive && currentIndex > 0 && currentIndex <= tourClusters.Count)
+            if (isActive && currentIndex > 0)
             {
-                var currentCluster = tourClusters[currentIndex - 1];
-                CurrentTourLocation = new ViewerLocationEvent(
-                    (decimal)Math.Round(currentCluster.CenterLatitude, 6),
-                    (decimal)Math.Round(currentCluster.CenterLongitude, 6),
-                    TourService.GetLocationDescription(currentCluster))
+                // Check if using external tour groups or internal clusters
+                if (externalTourGroups.Count > 0 && currentIndex <= externalTourGroups.Count)
                 {
-                    Id = Guid.NewGuid()
-                };
+                    var currentGroup = externalTourGroups[currentIndex - 1];
+                    CurrentTourLocation = new ViewerLocationEvent(
+                        (decimal)Math.Round(currentGroup.CenterLatitude, 6),
+                        (decimal)Math.Round(currentGroup.CenterLongitude, 6),
+                        currentGroup.RegionName)
+                    {
+                        Id = Guid.NewGuid()
+                    };
+                }
+                else if (tourClusters.Count > 0 && currentIndex <= tourClusters.Count)
+                {
+                    var currentCluster = tourClusters[currentIndex - 1];
+                    CurrentTourLocation = new ViewerLocationEvent(
+                        (decimal)Math.Round(currentCluster.CenterLatitude, 6),
+                        (decimal)Math.Round(currentCluster.CenterLongitude, 6),
+                        TourService.GetLocationDescription(currentCluster))
+                    {
+                        Id = Guid.NewGuid()
+                    };
+                }
+                else
+                {
+                    CurrentTourLocation = null;
+                }
             }
             else
             {
@@ -777,6 +847,7 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
             TourLocations.Clear();
             PendingLocationQueue.Clear();
             tourClusters.Clear();
+            externalTourGroups.Clear();
             aggregatedMarkers.Clear();
             locationKeyIndex.Clear();
             userLocationIndex.Clear();
@@ -785,6 +856,31 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"WARNING: Error during component disposal: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Restarts the tour by stopping any active tour, clearing caches, and starting fresh.
+    /// Can be called externally to force a tour restart with new groupings.
+    /// </summary>
+    public async Task RestartTourAsync()
+    {
+        Console.WriteLine("🔄 RestartTourAsync called - restarting tour with fresh groupings");
+        
+        // Stop current tour if active
+        if (IsTourActive)
+        {
+            await StopMapTour();
+        }
+        
+        // Clear cached tour data
+        tourClusters.Clear();
+        externalTourGroups.Clear();
+        
+        // Start new tour if we have locations
+        if (TourLocations.Count > 0)
+        {
+            await StartMapTour();
         }
     }
 
