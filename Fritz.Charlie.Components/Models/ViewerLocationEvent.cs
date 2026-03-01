@@ -39,6 +39,21 @@ public record struct ViewerLocationEvent(decimal Latitude, decimal Longitude, st
 	public string StreamId { get; set; } = string.Empty;
 
 	/// <summary>
+	/// Subscription tier: 0 = not subscribed, 1/2/3 = tier level.
+	/// </summary>
+	public int SubTier { get; set; } = 0;
+
+	/// <summary>
+	/// Number of consecutive months subscribed. 0 if not subscribed.
+	/// </summary>
+	public int SubMonths { get; set; } = 0;
+
+	/// <summary>
+	/// Whether the user is a Channel VIP (manually assigned by broadcaster).
+	/// </summary>
+	public bool IsVip { get; set; } = false;
+
+	/// <summary>
 	/// Static instance for unknown/invalid locations
 	/// </summary>
 	public readonly static ViewerLocationEvent Unknown = new ViewerLocationEvent(0, 0, "Unknown");
