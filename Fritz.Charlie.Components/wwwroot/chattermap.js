@@ -858,6 +858,32 @@ top: 50%;
         return true;
     }
 
+    // Draw a trace path polyline on the map
+    drawTracePath(coords) {
+        if (!this.map) {
+            console.error('Map not initialized');
+            return;
+        }
+        try {
+            // Remove existing trace polyline if present
+            if (this.tracePolyline) {
+                this.map.removeLayer(this.tracePolyline);
+                this.tracePolyline = null;
+            }
+
+            this.tracePolyline = L.polyline(coords, {
+                color: '#8A2BE2',
+                weight: 2,
+                dashArray: '8, 12',
+                opacity: 0.8
+            }).addTo(this.map);
+
+            console.log(`Drew trace path with ${coords.length} points`);
+        } catch (error) {
+            console.error('Error drawing trace path:', error);
+        }
+    }
+
     // Clear all markers
     clearMarkers() {
         if (this.markerClusterGroups.size > 0) {
@@ -1262,4 +1288,12 @@ export function showPinCelebration(lat, lng, description, service, userType, dur
     }
     console.error('Map instance not initialized');
     return Promise.resolve();
+}
+
+export function drawTracePath(coords) {
+    if (mapInstance) {
+        mapInstance.drawTracePath(coords);
+    } else {
+        console.error('Map instance not initialized');
+    }
 }

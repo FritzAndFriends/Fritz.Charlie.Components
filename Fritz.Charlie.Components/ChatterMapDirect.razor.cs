@@ -676,6 +676,23 @@ public partial class ChatterMapDirect : ComponentBase, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Draws a trace path polyline on the map for the given coordinates.
+    /// </summary>
+    public async Task DrawTracePathAsync(IReadOnlyList<(decimal Lat, decimal Lng)> path)
+    {
+        if (!mapInitialized || mapModule == null) return;
+        try
+        {
+            var coords = path.Select(p => new[] { (double)p.Lat, (double)p.Lng }).ToArray();
+            await mapModule.InvokeVoidAsync("drawTracePath", (object)coords);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error drawing trace path: {ex.Message}");
+        }
+    }
+
     private async Task ProcessTestMessage()
     {
         if (string.IsNullOrWhiteSpace(TestMessage))
