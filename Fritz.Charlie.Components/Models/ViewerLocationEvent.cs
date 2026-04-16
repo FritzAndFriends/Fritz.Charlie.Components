@@ -54,6 +54,16 @@ public record struct ViewerLocationEvent(decimal Latitude, decimal Longitude, st
 	public bool IsVip { get; set; } = false;
 
 	/// <summary>
+	/// The country where this location resides, as resolved by the geocoder.
+	/// </summary>
+	public string Country { get; set; } = string.Empty;
+
+	/// <summary>
+	/// The state/province/region where this location resides, as resolved by the geocoder.
+	/// </summary>
+	public string State { get; set; } = string.Empty;
+
+	/// <summary>
 	/// Static instance for unknown/invalid locations
 	/// </summary>
 	public readonly static ViewerLocationEvent Unknown = new ViewerLocationEvent(0, 0, "Unknown");
